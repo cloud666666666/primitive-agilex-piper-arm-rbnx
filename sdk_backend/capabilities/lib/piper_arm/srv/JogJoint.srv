@@ -1,0 +1,8 @@
+int32 joint
+float64 delta_deg
+int32 speed_percent
+---
+bool success
+string arm
+float64[] target_joints_deg
+string detail

@@ -1,0 +1,78 @@
+---
+description: Safely control one AgileX Piper arm and its factory CAN gripper through piper_sdk.
+---
+
+# Piper arm primitive
+
+Each deployment instance owns exactly one configured CAN interface. A typical
+dual-arm deployment maps `left_piper` to `can_left` and `right_piper` to
+`can_right`.
+
+Each instance also exposes the shared health state and stream contracts. They
+only read the active SDK connection and report per-joint voltage, current,
+motor/driver temperature, enable state, communication state, and fault codes
+for Soma and Vitals.
+
+Use `status` before motion and for on-demand health queries. Its joint arrays
+are ordered J1 through J6 and include angle, voltage, current, motor/driver
+temperature, driver enable, communication, and fault code. Use `jog_joint`
+only for small relative joint movements. Joint numbers are 1 through 6 and
+positive/negative deltas follow the Piper joint convention. A request is
+rejected if it exceeds the configured per-call delta, speed, local URDF limit,
+if any current joint would be clamped by Piper firmware, or if hardware motion
+is locked.
+
+Use `execute_joint_trajectory` only with operator-recorded and verified
+joint-space paths. Each waypoint has a unique name and exactly six absolute
+angles in J1-through-J6 order. The complete trajectory is validated before any
+enable or motion command, is limited to 32 waypoints by deployment policy, and
+uses the same 15 percent speed ceiling as joint jogging. A disabled arm is
+enabled automatically and remains enabled; the gripper state is not changed.
+Each waypoint requires three consecutive feedback samples with all six joints
+inside the configured 1.5 degree position tolerance before execution advances.
+A failure stops the sequence and reports the completed count, failed waypoint,
+and final feedback. The capability performs no Cartesian interpolation,
+collision checking, or perception; intermediate clearance waypoints are
+therefore mandatory.
+
+The deployment tolerates up to 3 degrees of feedback outside a nominal joint
+limit to accommodate encoder zero offset and slight gravity sag after disable.
+Within that tolerance Piper firmware may still clamp an out-of-range axis to
+the nominal boundary when any grouped joint command is sent.
+Joint motion is considered complete when feedback is within 1.5 degrees of
+the requested target.
+
+`enable_arm`, `disable_arm`, `enable_gripper`, and `disable_gripper` expose the
+two independent hardware enable states as explicit, idempotent operations.
+`enable_arm` and `disable_arm` address joint drivers 1 through 6 individually
+because the Piper all-motor selector also changes the factory gripper state on
+this hardware. `enable_gripper` and `disable_gripper` send only gripper control
+commands and leave all six joint-driver enable states unchanged.
+`jog_joint` automatically enables a disabled arm before moving. `set_gripper`
+automatically enables the arm and gripper when either is disabled. Motion
+waits through the Piper firmware's delayed joint-driver feedback after gripper
+motion and restores any joint driver that the firmware drops. Motion commands
+retain the resulting enable states after success. An explicit disable changes
+only the requested hardware, while a configured shutdown stop first sends a
+fast emergency stop and then disables all six arm joint drivers. It also
+disables the gripper when that primitive process operated the gripper.
+
+`set_gripper` accepts jaw opening in metres from 0.0 (closed) through 0.07
+(open), verifies targets with a 1 mm tolerance, and restores arm joint-driver
+enable state even when gripper motion times out. It rejects commands until the
+gripper zero has been established. For operator-verified grasp targets at or
+below 0.035 m, a closing command also succeeds with `contact_detected=true`
+when the jaws close by at least 3 mm from their starting opening, stop before
+the requested target, and remain within a 1 mm band for one second while
+enabled and fault-free. Contact is based on closing travel and stability, not
+the object's absolute width or its distance above the target. This heuristic
+is not used for opening or release commands.
+`set_gripper_zero` records the current position as zero only after the operator
+explicitly confirms that the gripper is fully closed. It rejects encoder offsets
+greater than 10 mm, follows the Piper disable-and-0xAE sequence, verifies zero
+feedback, and leaves the gripper disabled. A timed-out gripper command reports
+failure without implicitly disabling the arm or gripper.
+`emergency_stop` is always available, including while motion is locked.
+
+The primitive does not provide Cartesian, collision-aware, perception, or
+camera-guided motion. Never infer a named pose from this interface.

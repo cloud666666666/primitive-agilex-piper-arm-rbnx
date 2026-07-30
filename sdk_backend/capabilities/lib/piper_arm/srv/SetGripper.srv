@@ -1,0 +1,8 @@
+float64 opening_m
+float64 effort_nm
+---
+bool success
+string arm
+float64 opening_m
+bool contact_detected
+string detail

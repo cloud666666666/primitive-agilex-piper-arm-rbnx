@@ -1,0 +1,9 @@
+[contract]
+id = "robonix/primitive/arm/set_enabled"
+version = "1"
+kind = "primitive"
+idl = "piper_arm/srv/SetEnabled.srv"
+description = "Backward-compatible arm enable switch; new plans should use the explicit enable_arm or disable_arm capability."
+
+[mode]
+type = "rpc"

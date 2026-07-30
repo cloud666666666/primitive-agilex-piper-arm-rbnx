@@ -1,0 +1,9 @@
+[contract]
+id = "robonix/primitive/arm/disable_gripper"
+version = "1"
+kind = "primitive"
+idl = "piper_arm/srv/DisableGripper.srv"
+description = "Explicitly disable one Piper factory gripper without disabling the arm."
+
+[mode]
+type = "rpc"

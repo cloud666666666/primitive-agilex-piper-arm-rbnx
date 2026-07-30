@@ -1,0 +1,9 @@
+[contract]
+id = "robonix/primitive/arm/enable_gripper"
+version = "1"
+kind = "primitive"
+idl = "piper_arm/srv/EnableGripper.srv"
+description = "Idempotently enable one Piper factory gripper without changing any arm joint-driver enable state."
+
+[mode]
+type = "rpc"

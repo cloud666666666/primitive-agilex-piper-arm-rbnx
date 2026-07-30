@@ -1,0 +1,9 @@
+[contract]
+id = "robonix/primitive/arm/status"
+version = "1"
+kind = "primitive"
+idl = "piper_arm/srv/GetStatus.srv"
+description = "Read one Piper provider's live joint angles, per-joint voltage/current/temperature/driver health, gripper, enable, and fault state without moving hardware. Arrays are ordered J1 through J6."
+
+[mode]
+type = "rpc"

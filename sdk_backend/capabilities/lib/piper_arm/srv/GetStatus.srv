@@ -1,0 +1,22 @@
+---
+bool connected
+bool enabled
+bool motion_unlocked
+string arm
+string can_port
+float64[] joints_deg
+bool telemetry_valid
+float64[] joint_voltages_v
+float64[] joint_currents_a
+float64[] joint_motor_temperatures_c
+float64[] joint_driver_temperatures_c
+bool[] joint_driver_enabled
+bool[] joint_communication_ok
+int32[] joint_fault_codes
+float64 gripper_opening_m
+bool gripper_enabled
+bool gripper_homed
+bool gripper_fault
+int32 gripper_status_code
+int32 error_code
+string detail

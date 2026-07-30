@@ -23,6 +23,23 @@ The FOUR **standard** contracts (driver / joint_states / joint_command / end_pos
 
 > **Single-source-of-truth** for the `PiperStatusMsg` IDL is the vendored `src/piper_msgs/msg/` directory. The mirrored copy under `capabilities/lib/piper_msgs/msg/` is what `rbnx codegen` / atlas's contract registry actually scan. Keep the two in sync — plain file copies are used rather than symlinks to keep `git diff` legible.
 
+## Candidate direct-SDK backend
+
+[`sdk_backend/`](sdk_backend/) contains a field-tested direct `piper_sdk`
+implementation contributed for maintainer review. It adds MCP operations for
+status, independent arm and gripper enable/disable, joint jogging, validated
+absolute joint trajectories, verified gripper motion and zeroing, emergency
+stop, and Vitals-compatible health telemetry.
+
+The contribution is deliberately additive: it does not modify this package's
+existing ROS 2 contracts, vendored ROS driver, root manifest, build script, or
+default start path. Some concepts overlap with the ROS backend, but both
+implementations are kept intact so the arm primitive maintainers can decide
+whether to retain separate backends, share capability contracts, or port
+selected behavior into the ROS driver. See
+[`SDK_BACKEND_PROPOSAL.md`](SDK_BACKEND_PROPOSAL.md) for the capability
+comparison, safety behavior, validation evidence, and integration options.
+
 ### Joint-space vs Cartesian control paths
 
 Two independent command channels; each one bypasses the other:

@@ -1,0 +1,9 @@
+JointWaypoint[] waypoints
+int32 speed_percent
+---
+bool success
+string arm
+int32 completed_waypoints
+string failed_waypoint
+float64[] final_joints_deg
+string detail
