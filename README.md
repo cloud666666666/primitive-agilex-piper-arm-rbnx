@@ -202,13 +202,32 @@ sentinel_timeout_s:  30.0             # max wait for first JointState in on_acti
 # pos_command_topic:    /arm/pos_command
 ```
 
-For the direct-SDK backend:
+### Selecting a backend in a deployment
+
+Select the backend in the deployment repository's `robonix_manifest.yaml`,
+under the `config:` block of each Piper primitive instance. Do not edit this
+package's `config.spec` to select a backend, and do not put `backend` in
+`.env`. If `backend` is omitted, the instance uses `ros2`.
+
+A dual-arm direct-SDK deployment is configured as follows:
 
 ```yaml
-backend:      sdk
-arm_label:    left
-can_port:     can_left
-allow_motion: false
+primitive:
+  - name: left_piper
+    path: ./primitives/piper_arm
+    config:
+      backend: sdk
+      arm_label: left
+      can_port: can_left
+      allow_motion: false
+
+  - name: right_piper
+    path: ./primitives/piper_arm
+    config:
+      backend: sdk
+      arm_label: right
+      can_port: can_right
+      allow_motion: false
 ```
 
 `PIPER_SDK_PARENT` must point to the directory containing the tested
