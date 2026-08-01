@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Bounded, testable control logic around piper_sdk."""
 
 from __future__ import annotations

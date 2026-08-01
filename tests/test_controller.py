@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import unittest
 
-from piper_arm.controller import (
+from piper_arm_sdk.controller import (
     JointTrajectoryExecutionError,
     JointTrajectoryWaypoint,
     PiperControlError,

@@ -1,8 +1,22 @@
 ---
-description: Safely control one AgileX Piper arm and its factory CAN gripper through piper_sdk.
+description: Control one AgileX Piper arm through a selectable ROS 2 or direct-SDK backend.
 ---
 
 # Piper arm primitive
+
+This package has one manifest, provider identity and contract source. Select
+`backend: ros2` (the default) for the original ROS topic interface, or
+`backend: sdk` for the MCP and Vitals interface below.
+
+## ROS 2 backend
+
+The ROS backend preserves the original `joint_states`, `joint_command`,
+`end_pose`, `pos_command` and vendor `arm_status` topic behavior. It starts the
+vendored `piper_ros` driver during activation and stops its process group on
+deactivation or shutdown. SDK-only MCP calls are unavailable unless the
+instance selects `backend: sdk`.
+
+## Direct-SDK backend
 
 Each deployment instance owns exactly one configured CAN interface. A typical
 dual-arm deployment maps `left_piper` to `can_left` and `right_piper` to

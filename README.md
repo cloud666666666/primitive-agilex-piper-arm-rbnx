@@ -1,12 +1,30 @@
 # primitive-agilex-piper-arm-rbnx
 
-Robonix package wrapping the **AgileX Piper 6-DoF arm** hardware driver. Owns the `primitive/arm/*` namespace.
+Robonix package wrapping the **AgileX Piper 6-DoF arm** hardware driver. It
+provides the original ROS 2 backend and a direct `piper_sdk` backend behind one
+package identity and one `primitive/arm/*` namespace.
 
 Catalog name: `robonix.primitive.agilex.piper.arm`.
 
 > Naming note: internal directory / binary name is `piper_ctl` (`_ctl` = low-level control), while the contract namespace is `arm`. Piper is an arm, so calling this `piper_chassis_rbnx` would mislead.
 
+## Backends
+
+Set `backend` in the deployment instance's `config` block:
+
+| Backend | Default | Control surface |
+| --- | --- | --- |
+| `ros2` | yes | Original ROS topics for joint feedback, joint/Cartesian commands and Piper status |
+| `sdk` | no | MCP arm/gripper control, absolute joint trajectories and Vitals health telemetry |
+
+The default remains `ros2`; existing deployment manifests therefore keep the
+same startup and runtime behavior. Robonix delivers instance configuration only
+after the package process registers through `Driver(CMD_INIT)`, so
+`piper_ctl.main` performs the backend dispatch at that lifecycle boundary.
+
 ## Capability surface
+
+### ROS 2 backend
 
 | Contract                                | Mode       | Transport | Source / handler                                     |
 | --------------------------------------- | ---------- | --------- | ---------------------------------------------------- |
@@ -17,28 +35,32 @@ Catalog name: `robonix.primitive.agilex.piper.arm`.
 | `robonix/primitive/arm/pos_command`     | topic_in   | ROS 2     | `/<ns>/pos_command` (geometry_msgs/Pose) — driver subscribes; consumers publish |
 | `robonix/primitive/arm/arm_status`      | topic_out  | ROS 2     | `/<ns>/arm_status` (piper_msgs/PiperStatusMsg) — vendor extension |
 
-The FOUR **standard** contracts (driver / joint_states / joint_command / end_pose / pos_command) mirror robonix's global `capabilities/primitive/arm/*.v1.toml`: same id, version, IDL, and mode. Keep them byte-compatible with the global tree so a future consolidation is a no-op.
+The five **standard** contracts (driver / joint_states / joint_command / end_pose / pos_command) mirror robonix's global `capabilities/primitive/arm/*.v1.toml`: same id, version, IDL, and mode. Keep them byte-compatible with the global tree so a future consolidation is a no-op.
 
 `arm_status` is a Piper-specific **vendor extension** and remains package-local. Its IDL `piper_msgs/PiperStatusMsg.msg` is shipped at package level under `capabilities/lib/piper_msgs/msg/PiperStatusMsg.msg`.
 
 > **Single-source-of-truth** for the `PiperStatusMsg` IDL is the vendored `src/piper_msgs/msg/` directory. The mirrored copy under `capabilities/lib/piper_msgs/msg/` is what `rbnx codegen` / atlas's contract registry actually scan. Keep the two in sync — plain file copies are used rather than symlinks to keep `git diff` legible.
 
-## Candidate direct-SDK backend
+### Direct-SDK backend
 
-[`sdk_backend/`](sdk_backend/) contains a field-tested direct `piper_sdk`
-implementation contributed for maintainer review. It adds MCP operations for
-status, independent arm and gripper enable/disable, joint jogging, validated
-absolute joint trajectories, verified gripper motion and zeroing, emergency
-stop, and Vitals-compatible health telemetry.
+| Contract | Transport | Purpose |
+| --- | --- | --- |
+| `robonix/primitive/arm/status` | MCP | Joint, gripper and driver-health status |
+| `robonix/primitive/arm/enable_arm` / `disable_arm` | MCP | Independently enable or disable J1-J6 |
+| `robonix/primitive/arm/enable_gripper` / `disable_gripper` | MCP | Independently enable or disable the gripper |
+| `robonix/primitive/arm/jog_joint` | MCP | Bounded relative movement of one joint |
+| `robonix/primitive/arm/execute_joint_trajectory` | MCP | Validated absolute J1-J6 waypoint sequence |
+| `robonix/primitive/arm/set_gripper` | MCP | Verified opening or stable-contact grasp |
+| `robonix/primitive/arm/set_gripper_zero` | MCP | Operator-confirmed encoder zeroing |
+| `robonix/primitive/arm/emergency_stop` | MCP | Piper fast stop |
+| `robonix/primitive/health/state` / `stream` | gRPC | Vitals-compatible telemetry |
 
-The contribution is deliberately additive: it does not modify this package's
-existing ROS 2 contracts, vendored ROS driver, root manifest, build script, or
-default start path. Some concepts overlap with the ROS backend, but both
-implementations are kept intact so the arm primitive maintainers can decide
-whether to retain separate backends, share capability contracts, or port
-selected behavior into the ROS driver. See
-[`SDK_BACKEND_PROPOSAL.md`](SDK_BACKEND_PROPOSAL.md) for the capability
-comparison, safety behavior, validation evidence, and integration options.
+`set_enabled` remains as a backward-compatible arm-enable operation. The SDK
+backend validates finite inputs, Piper hard limits, speed, waypoint count,
+feedback age, settling tolerance and hardware faults. Motion is locked by
+default. Set `allow_motion: true`, `ROBONIX_ALLOW_MOTION=1`, or the per-arm
+override only after clearing the workspace and checking the emergency stop. See
+[`CAPABILITY.md`](CAPABILITY.md) for its complete behavioral contract.
 
 ### Joint-space vs Cartesian control paths
 
@@ -60,17 +82,21 @@ rbnx-cli has no defer/retry, so providers MUST come first in YAML declaration or
 
 ## Driver-init lifecycle
 
-`start.sh` brings up the atlas bridge — no ROS spawn. The bridge opens a gRPC server, registers the provider, declares only `primitive/arm/driver` (auto-emitted by the framework when codegen produces a `Driver` Servicer), then blocks on `Driver(CMD_INIT, config_json)`.
+`start.sh` brings up one shared provider process. It does not connect CAN or
+spawn ROS. The provider registers `primitive/arm/driver`, then blocks on
+`Driver(CMD_INIT, config_json)`.
 
 When `rbnx boot` invokes Init it passes the manifest's `config:` block as JSON. The lifecycle then runs:
 
-1. `CMD_INIT`: validate cfg (CAN port, bitrate, gripper flags, sentinel timeout);
-2. `CMD_ACTIVATE`: optionally run `scripts/can_activate.sh` when `auto_can_setup=true`;
-3. spawn `ros2 launch piper start_single_piper.launch.py …`;
-4. wait for the first `sensor_msgs/JointState` on `/<ns>/joint_states_single` as proof the CAN link came up;
-5. declare `arm/joint_states`, `arm/joint_command`, `arm/end_pose`, `arm/pos_command`, and `arm/arm_status` on atlas, then return ok.
+1. `CMD_INIT`: choose `backend` (default `ros2`) and validate only that backend's configuration;
+2. `CMD_ACTIVATE` with `ros2`: optionally set up CAN, spawn the ROS driver,
+   wait for `JointState`, then declare the five ROS data topics;
+3. `CMD_ACTIVATE` with `sdk`: import `piper_sdk`, connect the configured CAN
+   interface and publish the MCP/health endpoints without enabling or moving hardware.
 
-`CMD_DEACTIVATE` / `CMD_SHUTDOWN` kill the piper subprocess. Idempotent.
+`CMD_DEACTIVATE` / `CMD_SHUTDOWN` release the selected backend idempotently:
+the ROS backend kills its process group, while the SDK backend disconnects and
+applies its configured shutdown stop policy.
 
 ## CAN bring-up — TWO paths
 
@@ -124,6 +150,8 @@ Path B is more convenient when the USB-CAN's bus path shifts between sessions, b
 ```
 primitive-agilex-piper-arm-rbnx/
 ├── package_manifest.yaml
+├── config.spec                              # union config; backend selector
+├── CAPABILITY.md                            # direct-SDK behavior and safety
 ├── capabilities/
 │   ├── primitive/arm/
 │   │   ├── driver.v1.toml
@@ -131,12 +159,17 @@ primitive-agilex-piper-arm-rbnx/
 │   │   ├── joint_command.v1.toml
 │   │   ├── end_pose.v1.toml
 │   │   ├── pos_command.v1.toml
-│   │   └── arm_status.v1.toml               # Piper vendor extension
-│   └── lib/piper_msgs/msg/                  # IDL for codegen
-│       └── PiperStatusMsg.msg               # mirror of src/piper_msgs/msg/
+│   │   ├── arm_status.v1.toml               # Piper vendor extension
+│   │   └── status / enable / trajectory / gripper MCP contracts
+│   └── lib/
+│       ├── piper_msgs/msg/PiperStatusMsg.msg
+│       └── piper_arm/                       # shared SDK MCP IDL
 ├── piper_ctl/
-│   ├── __init__.py
-│   └── main.py                              # lifecycle + sentinel
+│   └── main.py                              # shared lifecycle + ROS backend
+├── piper_arm_sdk/
+│   ├── main.py                              # MCP/health handlers
+│   └── controller.py                        # bounded direct-SDK control
+├── tests/                                   # offline SDK/lifecycle tests
 ├── scripts/
 │   ├── build.sh                             # colcon + rbnx codegen
 │   ├── start.sh                             # source ROS, exec main
@@ -151,6 +184,7 @@ primitive-agilex-piper-arm-rbnx/
 ## Config (passed via `Driver(CMD_INIT, config_json)`)
 
 ```yaml
+backend:             ros2             # default; preserves original behavior
 can_port:            can_piper        # CAN interface name
 can_bitrate:         1000000
 can_usb_address:     ""               # pin via USB bus path; "" = first detected
@@ -168,12 +202,43 @@ sentinel_timeout_s:  30.0             # max wait for first JointState in on_acti
 # pos_command_topic:    /arm/pos_command
 ```
 
+For the direct-SDK backend:
+
+```yaml
+backend:      sdk
+arm_label:    left
+can_port:     can_left
+allow_motion: false
+```
+
+`PIPER_SDK_PARENT` must point to the directory containing the tested
+`piper_sdk/` checkout. The tested SDK is `0.2.20` at commit
+`4eddfcf817cd87de9acee316a72cf5b988025378`:
+
+```bash
+git clone https://github.com/agilexrobotics/piper_sdk.git
+git -C piper_sdk checkout --detach 4eddfcf817cd87de9acee316a72cf5b988025378
+export PIPER_SDK_PARENT="$(pwd)"
+```
+
+Here `PIPER_SDK_PARENT` is the directory containing the `piper_sdk/` checkout,
+not the checkout directory itself. All SDK limits and timeout defaults are
+documented in [`config.spec`](config.spec).
+
 ## Build / run standalone
 
 ```bash
-bash scripts/build.sh                                  # colcon + rbnx codegen
+bash scripts/build.sh                                  # ROS build + shared codegen/venv
 ROBONIX_ATLAS=127.0.0.1:50051 \
     bash scripts/start.sh                              # registers, awaits Init
+```
+
+Offline validation (does not open CAN or command hardware):
+
+```bash
+rbnx validate .
+rbnx build
+PYTHONPATH=. rbnx-build/venv/bin/python -m unittest discover -s tests -v
 ```
 
 To drive the lifecycle manually (without `rbnx boot`), call the arm's `Driver` service with `CMD_INIT` and a JSON config blob, then call `CMD_ACTIVATE`. Init only validates configuration; Activate returns after the first JointState is observed and the five data topics are declared.
@@ -214,4 +279,6 @@ If anything diverges from upstream, drop a `*.patch` alongside `src/` documentin
 
 ## License
 
-This package: Apache-2.0. Vendored piper_ros / piper_msgs / graspnet_msgs: see their respective LICENSE files.
+The existing package and ROS integration are Apache-2.0. The contributed
+direct-SDK implementation retains its MIT notice in [`LICENSE-SDK`](LICENSE-SDK).
+Vendored piper_ros / piper_msgs / graspnet_msgs keep their respective licenses.

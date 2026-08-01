@@ -1,10 +1,32 @@
 config:
+  # string, default: ros2; accepted values: ros2, sdk.
+  # ros2 preserves the package's original behavior. sdk selects the direct
+  # piper_sdk MCP/gripper/health implementation.
+  backend: ros2
+
+  # Common CAN interface setting. The ros2-compatible default is can_piper;
+  # SDK deployments commonly override this with can_left or can_right.
+  can_port: can_piper
+
+  # ROS 2 backend options. Ignored by the SDK backend.
+  can_bitrate: 1000000
+  can_usb_address: ""
+  auto_can_setup: false
+  auto_enable: true
+  gripper_exist: true
+  gripper_val_mutiple: 2
+  arm_namespace: /arm
+  sentinel_timeout_s: 30.0
+  # joint_states_topic: /arm/joint_states_single
+  # joint_command_topic: /arm/joint_command
+  # arm_status_topic: /arm/arm_status
+  # end_pose_topic: /arm/end_pose
+  # pos_command_topic: /arm/pos_command
+
+  # Direct-SDK backend options below. Ignored by the ROS 2 backend.
   # string; deployment instance label used in responses and diagnostics.
   # Use a stable value such as left or right.
   arm_label: left
-
-  # string; SocketCAN interface. It must exist and be UP before activation.
-  can_port: can_left
 
   # boolean, default: false. Deployment safety gate; the
   # ROBONIX_ALLOW_MOTION environment switch can override it at boot.

@@ -1,4 +1,10 @@
-"""Robonix MCP primitive for one locally connected Piper arm."""
+# SPDX-License-Identifier: MIT
+"""Direct-SDK backend for the unified AgileX Piper primitive.
+
+The package entry point lives in :mod:`piper_ctl.main`. This module registers
+the SDK-only MCP and health handlers on the shared provider and exposes plain
+lifecycle functions for the backend dispatcher.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +14,9 @@ from pathlib import Path
 import threading
 from typing import Any
 
-from robonix_api import Err, Ok, Primitive
+from robonix_api import Err, Ok
+
+from piper_provider import piper_arm
 
 from piper_arm_mcp import (  # type: ignore[import-not-found]
     DisableArm_Request,
@@ -50,8 +58,6 @@ logging.basicConfig(
     format="[%(name)s] %(levelname)s %(message)s",
 )
 log = logging.getLogger("piper_arm")
-
-piper_arm = Primitive(id="piper_arm", namespace="robonix/primitive/arm")
 
 _config: dict[str, Any] = {}
 _controller: PiperController | None = None
@@ -391,7 +397,6 @@ def emergency_stop(_req: EmergencyStop_Request) -> EmergencyStop_Response:
         return EmergencyStop_Response(success=False, arm=arm, detail=str(exc))
 
 
-@piper_arm.on_init
 def init(cfg: dict[str, Any]):
     global _config
     cfg = dict(cfg or {})
@@ -413,7 +418,6 @@ def init(cfg: dict[str, Any]):
     return Ok()
 
 
-@piper_arm.on_activate
 def activate():
     global _controller
     try:
@@ -493,22 +497,11 @@ def _disconnect() -> None:
         controller.disconnect(emergency_stop=_as_bool(_config.get("stop_on_shutdown", True)))
 
 
-@piper_arm.on_deactivate
 def deactivate():
     _disconnect()
     return Ok()
 
 
-@piper_arm.on_shutdown
 def shutdown():
     _disconnect()
     return Ok()
-
-
-def main() -> int:
-    piper_arm.run()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
