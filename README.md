@@ -230,19 +230,28 @@ primitive:
       allow_motion: false
 ```
 
-`PIPER_SDK_PARENT` must point to the directory containing the tested
-`piper_sdk/` checkout. The tested SDK is `0.2.20` at commit
-`4eddfcf817cd87de9acee316a72cf5b988025378`:
+`scripts/build.sh` automatically fetches the tested `piper_sdk` 0.2.20 source
+at commit `4eddfcf817cd87de9acee316a72cf5b988025378`. The checkout is stored under
+`rbnx-build/piper_sdk_parent/`, validated without opening CAN, and selected by
+`scripts/start.sh`; no host-level SDK installation or manual `PYTHONPATH` is
+required.
+
+For controlled offline builds, set `RBNX_PIPER_SDK_PARENT` to an existing
+directory that contains a `piper_sdk/` checkout. To skip SDK preparation on a
+ROS-only host, set `RBNX_PIPER_SDK_BUILD=0`; starting the SDK backend then
+requires the caller to provide `PIPER_SDK_PARENT`. The repository and full
+commit SHA may be overridden for a mirror or a deliberately tested revision:
 
 ```bash
-git clone https://github.com/agilexrobotics/piper_sdk.git
-git -C piper_sdk checkout --detach 4eddfcf817cd87de9acee316a72cf5b988025378
-export PIPER_SDK_PARENT="$(pwd)"
+RBNX_PIPER_SDK_PARENT=/opt/agilex-sdk-parent bash scripts/build.sh
+RBNX_PIPER_SDK_BUILD=0 bash scripts/build.sh
+RBNX_PIPER_SDK_REPO=https://mirror.example/piper_sdk.git \
+RBNX_PIPER_SDK_REF=4eddfcf817cd87de9acee316a72cf5b988025378 \
+    bash scripts/build.sh
 ```
 
-Here `PIPER_SDK_PARENT` is the directory containing the `piper_sdk/` checkout,
-not the checkout directory itself. All SDK limits and timeout defaults are
-documented in [`config.spec`](config.spec).
+All SDK limits and timeout defaults are documented in
+[`config.spec`](config.spec).
 
 ## Build / run standalone
 

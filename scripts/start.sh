@@ -24,6 +24,11 @@ if [[ -f "$PKG/rbnx-build/ws/install/setup.bash" ]]; then
     set +u; source "$PKG/rbnx-build/ws/install/setup.bash"; set -u
 fi
 
+if [[ -z "${PIPER_SDK_PARENT:-}" && -f "$PKG/rbnx-build/piper_sdk.env" ]]; then
+    # build.sh records its pinned checkout here. An explicit caller value wins.
+    # shellcheck disable=SC1091
+    set +u; source "$PKG/rbnx-build/piper_sdk.env"; set -u
+fi
 if [[ -n "${PIPER_SDK_PARENT:-}" ]]; then
     export PYTHONPATH="$PIPER_SDK_PARENT:${PYTHONPATH:-}"
 fi
