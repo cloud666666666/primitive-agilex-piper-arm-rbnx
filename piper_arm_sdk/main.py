@@ -471,9 +471,11 @@ def set_gripper(req: SetGripper_Request) -> SetGripper_Response:
 
 @piper_arm.mcp("robonix/primitive/arm/set_gripper_zero")
 def set_gripper_zero(req: SetGripperZero_Request) -> SetGripperZero_Response:
-    """Set the current fully closed factory-gripper position to zero. Call only
-    after the operator manually closes this provider's gripper and explicitly
-    confirms that state. The gripper remains disabled and the arm does not move."""
+    """Set the current fully closed factory-gripper position to zero. First call
+    disable_gripper, verify that the gripper is disabled, manually close it, then
+    call this operation with fully_closed_confirmed=true. The six arm joint
+    drivers may remain enabled. This rejects enabled grippers and sends no arm
+    motion."""
     arm = str(_config.get("arm_label", "unknown"))
     try:
         opening = _require_controller().set_gripper_zero(

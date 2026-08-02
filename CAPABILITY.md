@@ -81,9 +81,13 @@ the requested target, and remain within a 1 mm band for one second while
 enabled and fault-free. Contact is based on closing travel and stability, not
 the object's absolute width or its distance above the target. This heuristic
 is not used for opening or release commands.
-`set_gripper_zero` records the current position as zero only after the operator
-explicitly confirms that the gripper is fully closed. It rejects encoder offsets
-greater than 10 mm, follows the Piper disable-and-0xAE sequence, verifies zero
+`set_gripper_zero` is a one-time calibration rather than a prerequisite repeated
+before every movement. The operator must first call `disable_gripper`, verify
+`gripper_enabled=false`, manually close the gripper, and then call
+`set_gripper_zero` with `fully_closed_confirmed=true`. The six arm joint drivers
+may remain enabled because their state is independent. Zeroing rejects an
+enabled gripper without sending a command, rejects encoder offsets greater than
+10 mm, follows the Piper disabled-command-and-0xAE sequence, verifies zero
 feedback, and leaves the gripper disabled. A timed-out gripper command reports
 failure without implicitly disabling the arm or gripper.
 `emergency_stop` is always available, including while motion is locked. It also

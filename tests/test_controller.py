@@ -728,6 +728,16 @@ class PiperControllerTest(unittest.TestCase):
             ctl.set_gripper_zero(False)
         self.assertFalse(any(call[0] == "gripper" for call in sdk.calls))
 
+    def test_set_gripper_zero_requires_gripper_disable_before_confirmation(self):
+        ctl, sdk = controller(allow_motion=True)
+        sdk.gripper = 0
+        sdk.gripper_status = 0xC0
+
+        with self.assertRaisesRegex(PiperControlError, "call disable_gripper"):
+            ctl.set_gripper_zero(True)
+
+        self.assertFalse(any(call[0] == "gripper" for call in sdk.calls))
+
     def test_set_gripper_zero_requires_motion_unlock(self):
         ctl, sdk = controller(allow_motion=False)
         sdk.gripper = 0

@@ -583,13 +583,18 @@ class PiperController:
         with self._motion_operation(), self._lock:
             self._require_connected()
             self._require_motion_unlocked()
+            feedback = self._read_gripper_feedback()
+            if bool(feedback.foc_status.driver_enable_status):
+                raise PiperControlError(
+                    "gripper is enabled; call disable_gripper before manually "
+                    "closing the gripper and calling set_gripper_zero"
+                )
             if not fully_closed_confirmed:
                 raise PiperControlError(
                     "fully_closed_confirmed must be true after the operator manually "
                     "closes the gripper"
                 )
 
-            feedback = self._read_gripper_feedback()
             status_code = int(feedback.status_code)
             if status_code & 0x3F:
                 raise PiperControlError(

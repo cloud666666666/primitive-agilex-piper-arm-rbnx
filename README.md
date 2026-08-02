@@ -80,6 +80,25 @@ backend activation and removed on deactivate or shutdown. The script rejects a
 token file owned by another user or readable by group/other users. Set
 `ROBONIX_ATLAS` when the operator shell does not use the default Atlas endpoint.
 
+### One-time gripper zeroing
+
+Gripper zeroing is required only when neither Piper feedback nor the current
+provider session has an established zero; it is not repeated before every
+gripper movement. Perform this operator workflow on the selected provider:
+
+1. Call `disable_gripper` with an empty request `{}`.
+2. Read `status` and verify `gripper_enabled=false`.
+3. Manually close the disabled gripper to its mechanical closed position.
+4. Call `set_gripper_zero` with `{"fully_closed_confirmed": true}`.
+5. Call `enable_gripper`, or send the next `set_gripper` request and let it
+   enable the gripper automatically.
+
+The six arm joint drivers may remain enabled throughout this workflow because
+arm and gripper enable states are controlled independently. `set_gripper_zero`
+rejects an enabled gripper with an instruction to call `disable_gripper` first;
+on rejection it sends no gripper command. A successful zero operation verifies
+the feedback and leaves the gripper disabled.
+
 ### Joint-space vs Cartesian control paths
 
 Two independent command channels; each one bypasses the other:

@@ -3,7 +3,7 @@ id = "robonix/primitive/arm/set_gripper_zero"
 version = "1"
 kind = "primitive"
 idl = "piper_arm/srv/SetGripperZero.srv"
-description = "After explicit operator confirmation that a Piper gripper is manually fully closed, safely set and verify its current position as zero without moving the arm."
+description = "After disable_gripper has disabled the gripper and the operator has manually fully closed it, accept explicit confirmation and safely set and verify its current position as zero without moving the arm. The six arm joint drivers may remain enabled."
 
 [mode]
 type = "rpc"
