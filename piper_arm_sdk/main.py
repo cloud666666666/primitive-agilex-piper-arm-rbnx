@@ -8,9 +8,12 @@ lifecycle functions for the backend dispatcher.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 from pathlib import Path
+import secrets
+import tempfile
 import threading
 from typing import Any
 
@@ -51,6 +54,7 @@ from .controller import (
 )
 
 import health_pb2  # type: ignore[import-not-found]  # noqa: E402
+import piper_arm_pb2  # type: ignore[import-not-found]  # noqa: E402
 
 
 logging.basicConfig(
@@ -62,6 +66,8 @@ log = logging.getLogger("piper_arm")
 _config: dict[str, Any] = {}
 _controller: PiperController | None = None
 _health_stop = threading.Event()
+_operator_token: str | None = None
+_operator_token_path: Path | None = None
 
 
 def _as_bool(value: Any) -> bool:
@@ -82,6 +88,62 @@ def _motion_unlocked(cfg: dict[str, Any]) -> bool:
 def _operator_confirmed_gripper_zero(cfg: dict[str, Any]) -> bool:
     arm_label = str(cfg.get("arm_label", "")).strip().upper()
     return _as_bool(os.environ.get(f"ROBONIX_CONFIRM_{arm_label}_GRIPPER_ZERO", "0"))
+
+
+def _motion_token_file() -> Path:
+    provider_id = os.environ.get("RBNX_INSTANCE_NAME", piper_arm.id).strip()
+    safe_provider_id = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "_"
+        for char in provider_id
+    )
+    return piper_arm.pkg_root / "rbnx-build" / "data" / f"{safe_provider_id}.motion-token"
+
+
+def _revoke_operator_token() -> None:
+    global _operator_token, _operator_token_path
+    token = _operator_token
+    path = _operator_token_path
+    _operator_token = None
+    _operator_token_path = None
+    if token is None or path is None:
+        return
+    try:
+        if path.read_text(encoding="utf-8").strip() == token:
+            path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        log.warning("could not remove operator token file %s: %s", path, exc)
+
+
+def _provision_operator_token() -> Path:
+    """Create one local, owner-readable token for this active session."""
+    global _operator_token, _operator_token_path
+    _revoke_operator_token()
+    path = _motion_token_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_urlsafe(32)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=str(path.parent), text=True
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(token)
+            stream.write("\n")
+        os.replace(temporary_path, path)
+        path.chmod(0o600)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        temporary_path.unlink(missing_ok=True)
+        raise
+    _operator_token = token
+    _operator_token_path = path
+    return path
 
 
 def _require_controller() -> PiperController:
@@ -114,6 +176,55 @@ def health_stream(_request, context):
     while context.is_active() and not _health_stop.is_set():
         yield _health_state()
         _health_stop.wait(0.5)
+
+
+@piper_arm.grpc("robonix/primitive/arm/motion_lock")
+def motion_lock(
+    req: piper_arm_pb2.SetMotionLock_Request,
+) -> piper_arm_pb2.SetMotionLock_Response:
+    """Operator-only runtime lock. Lock is fail-safe; unlock needs the local
+    per-activation token and is deliberately unavailable through MCP."""
+    arm = str(_config.get("arm_label", "unknown"))
+    controller = _controller
+    if controller is None:
+        return piper_arm_pb2.SetMotionLock_Response(
+            success=False,
+            locked=True,
+            motion_unlocked=False,
+            arm=arm,
+            detail="Piper primitive is not active",
+        )
+    try:
+        if not bool(req.locked):
+            expected = _operator_token
+            supplied = str(req.operator_token)
+            if (
+                expected is None
+                or not supplied
+                or not hmac.compare_digest(supplied, expected)
+            ):
+                raise PiperControlError("operator authorization failed")
+        locked = controller.set_motion_locked(bool(req.locked))
+        return piper_arm_pb2.SetMotionLock_Response(
+            success=True,
+            locked=locked,
+            motion_unlocked=not locked,
+            arm=arm,
+            detail=(
+                f"{arm} motion locked and fast stop sent"
+                if locked
+                else f"{arm} motion unlocked by operator"
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        locked = not controller.allow_motion
+        return piper_arm_pb2.SetMotionLock_Response(
+            success=False,
+            locked=locked,
+            motion_unlocked=not locked,
+            arm=arm,
+            detail=str(exc),
+        )
 
 
 @piper_arm.mcp("robonix/primitive/arm/status")
@@ -388,7 +499,7 @@ def set_gripper_zero(req: SetGripperZero_Request) -> SetGripperZero_Response:
 @piper_arm.mcp("robonix/primitive/arm/emergency_stop")
 def emergency_stop(_req: EmergencyStop_Request) -> EmergencyStop_Response:
     """Immediately issue the Piper fast emergency-stop command to this arm.
-    This remains available even when normal hardware motion is locked."""
+    This remains available when locked and also closes the runtime motion gate."""
     arm = str(_config.get("arm_label", "unknown"))
     try:
         _require_controller().emergency_stop()
@@ -480,11 +591,24 @@ def activate():
             command_period_s=float(_config.get("command_period_s", 0.02)),
         )
         _controller.connect()
+        token_path = _provision_operator_token()
         _health_stop.clear()
-        log.info("active arm=%s can=%s (no enable or motion sent)", _config["arm_label"], _config["can_port"])
+        log.info(
+            "active arm=%s can=%s operator_token_file=%s (no enable or motion sent)",
+            _config["arm_label"],
+            _config["can_port"],
+            token_path,
+        )
         return Ok()
     except Exception as exc:  # noqa: BLE001
+        controller = _controller
         _controller = None
+        _revoke_operator_token()
+        if controller is not None:
+            try:
+                controller.disconnect(emergency_stop=False)
+            except Exception:  # noqa: BLE001
+                pass
         return Err(f"Piper activation failed: {exc}")
 
 
@@ -493,8 +617,11 @@ def _disconnect() -> None:
     controller = _controller
     _controller = None
     _health_stop.set()
+    _revoke_operator_token()
     if controller is not None:
-        controller.disconnect(emergency_stop=_as_bool(_config.get("stop_on_shutdown", True)))
+        controller.disconnect(
+            emergency_stop=_as_bool(_config.get("stop_on_shutdown", True))
+        )
 
 
 def deactivate():

@@ -1,0 +1,8 @@
+bool locked
+string operator_token
+---
+bool success
+bool locked
+bool motion_unlocked
+string arm
+string detail

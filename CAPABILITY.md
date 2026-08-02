@@ -86,7 +86,19 @@ explicitly confirms that the gripper is fully closed. It rejects encoder offsets
 greater than 10 mm, follows the Piper disable-and-0xAE sequence, verifies zero
 feedback, and leaves the gripper disabled. A timed-out gripper command reports
 failure without implicitly disabling the arm or gripper.
-`emergency_stop` is always available, including while motion is locked.
+`emergency_stop` is always available, including while motion is locked. It also
+closes the runtime motion gate, so a stopped operation cannot resume or send a
+later trajectory frame. The same immediate stop behavior is used by the
+gRPC-only `motion_lock` operator capability. Lock requests are deliberately
+fail-safe and require no credential. Unlock requests are rejected unless they
+carry the owner-only token generated for the current provider activation. The
+token is stored as `rbnx-build/data/<provider>.motion-token` with mode `0600`,
+is replaced on activation, and is removed on deactivate or shutdown. This
+operator capability is intentionally not registered as an MCP tool.
+
+`allow_motion`, `ROBONIX_ALLOW_MOTION`, and the per-arm environment override
+choose only the initial motion-gate state during activation. They do not bypass
+authorization for a later runtime unlock.
 
 The primitive does not provide Cartesian, collision-aware, perception, or
 camera-guided motion. Never infer a named pose from this interface.

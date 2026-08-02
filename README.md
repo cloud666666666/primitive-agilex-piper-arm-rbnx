@@ -52,15 +52,33 @@ The five **standard** contracts (driver / joint_states / joint_command / end_pos
 | `robonix/primitive/arm/execute_joint_trajectory` | MCP | Validated absolute J1-J6 waypoint sequence |
 | `robonix/primitive/arm/set_gripper` | MCP | Verified opening or stable-contact grasp |
 | `robonix/primitive/arm/set_gripper_zero` | MCP | Operator-confirmed encoder zeroing |
-| `robonix/primitive/arm/emergency_stop` | MCP | Piper fast stop |
+| `robonix/primitive/arm/emergency_stop` | MCP | Piper fast stop and runtime motion lock |
+| `robonix/primitive/arm/motion_lock` | gRPC only | Operator-authorized runtime lock/unlock; intentionally absent from MCP |
 | `robonix/primitive/health/state` / `stream` | gRPC | Vitals-compatible telemetry |
 
 `set_enabled` remains as a backward-compatible arm-enable operation. The SDK
 backend validates finite inputs, Piper hard limits, speed, waypoint count,
 feedback age, settling tolerance and hardware faults. Motion is locked by
-default. Set `allow_motion: true`, `ROBONIX_ALLOW_MOTION=1`, or the per-arm
-override only after clearing the workspace and checking the emergency stop. See
+default. `allow_motion`, `ROBONIX_ALLOW_MOTION`, and the per-arm override select
+only the initial state at activation. Set them to true only after clearing the
+workspace and checking the emergency stop. Runtime locking immediately closes
+the software motion gate and sends Piper's fast stop, including during an active
+trajectory. Runtime unlocking is not an MCP tool and requires the local token
+generated with mode `0600` for the current provider activation. See
 [`CAPABILITY.md`](CAPABILITY.md) for its complete behavioral contract.
+
+Use the dedicated operator script against the deployment provider id:
+
+```bash
+rbnx-build/venv/bin/python scripts/motion_lock.py lock --provider left_piper
+rbnx-build/venv/bin/python scripts/motion_lock.py unlock --provider left_piper
+```
+
+Locking never requires a token. Unlocking reads
+`rbnx-build/data/<provider>.motion-token`; the token is replaced on every SDK
+backend activation and removed on deactivate or shutdown. The script rejects a
+token file owned by another user or readable by group/other users. Set
+`ROBONIX_ATLAS` when the operator shell does not use the default Atlas endpoint.
 
 ### Joint-space vs Cartesian control paths
 

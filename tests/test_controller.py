@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import threading
 import unittest
 
 from piper_arm_sdk.controller import (
@@ -124,6 +125,7 @@ def controller(
     gripper_contact_stability_s: float = 0.02,
     joint_position_tolerance_deg: float = 1.5,
     feedback_timeout_s: float = 0.1,
+    motion_timeout_s: float = 0.1,
     max_trajectory_waypoints: int = 32,
 ) -> tuple[PiperController, FakeSdk]:
     sdk = FakeSdk()
@@ -134,7 +136,7 @@ def controller(
         allow_motion=allow_motion,
         max_trajectory_waypoints=max_trajectory_waypoints,
         feedback_timeout_s=feedback_timeout_s,
-        motion_timeout_s=0.1,
+        motion_timeout_s=motion_timeout_s,
         joint_position_tolerance_deg=joint_position_tolerance_deg,
         gripper_zero_settle_s=0.0,
         gripper_position_tolerance_m=gripper_position_tolerance_m,
@@ -823,6 +825,105 @@ class PiperControllerTest(unittest.TestCase):
         ctl, sdk = controller(allow_motion=False)
         ctl.emergency_stop()
         self.assertIn(("emergency", 1), sdk.calls)
+        self.assertFalse(ctl.allow_motion)
+
+    def test_runtime_lock_interrupts_active_trajectory(self):
+        ctl, sdk = controller(allow_motion=True, motion_timeout_s=1.0)
+        sdk.enabled = True
+        command_started = threading.Event()
+        errors: list[Exception] = []
+
+        def hold_position(*targets):
+            sdk.calls.append(("joints", *targets))
+            command_started.set()
+
+        sdk.JointCtrl = hold_position
+        waypoint = JointTrajectoryWaypoint(
+            "moving",
+            (10.0, 90.0, -90.0, 0.0, 0.0, 0.0),
+        )
+
+        def execute():
+            try:
+                ctl.execute_joint_trajectory([waypoint], 5)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        worker = threading.Thread(target=execute)
+        worker.start()
+        self.assertTrue(command_started.wait(0.5))
+
+        self.assertTrue(ctl.set_motion_locked(True))
+        worker.join(0.5)
+
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(ctl.allow_motion)
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], JointTrajectoryExecutionError)
+        self.assertIn("motion is locked", str(errors[0]))
+        stop_index = sdk.calls.index(("emergency", 1))
+        self.assertFalse(
+            any(call[0] == "joints" for call in sdk.calls[stop_index + 1 :])
+        )
+
+    def test_runtime_unlock_releases_fast_stop_before_opening_gate(self):
+        ctl, sdk = controller(allow_motion=False)
+
+        self.assertFalse(ctl.set_motion_locked(False))
+
+        self.assertTrue(ctl.allow_motion)
+        self.assertEqual(sdk.calls[-1], ("emergency", 2))
+
+    def test_unlock_does_not_resume_trajectory_cancelled_by_lock(self):
+        ctl, sdk = controller(allow_motion=True, motion_timeout_s=1.0)
+        sdk.enabled = True
+        command_started = threading.Event()
+        feedback_blocked = threading.Event()
+        release_feedback = threading.Event()
+        errors: list[Exception] = []
+        original_feedback = sdk.GetArmJointMsgs
+
+        def hold_position(*targets):
+            sdk.calls.append(("joints", *targets))
+            command_started.set()
+
+        def block_feedback_after_command():
+            if command_started.is_set():
+                feedback_blocked.set()
+                release_feedback.wait(0.5)
+            return original_feedback()
+
+        sdk.JointCtrl = hold_position
+        sdk.GetArmJointMsgs = block_feedback_after_command
+        waypoint = JointTrajectoryWaypoint(
+            "moving",
+            (10.0, 90.0, -90.0, 0.0, 0.0, 0.0),
+        )
+
+        def execute():
+            try:
+                ctl.execute_joint_trajectory([waypoint], 5)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        worker = threading.Thread(target=execute)
+        worker.start()
+        self.assertTrue(feedback_blocked.wait(0.5))
+
+        self.assertTrue(ctl.set_motion_locked(True))
+        self.assertFalse(ctl.set_motion_locked(False))
+        release_feedback.set()
+        worker.join(0.5)
+
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(ctl.allow_motion)
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], JointTrajectoryExecutionError)
+        self.assertIn("cancelled by runtime lock", str(errors[0]))
+        stop_index = sdk.calls.index(("emergency", 1))
+        self.assertFalse(
+            any(call[0] == "joints" for call in sdk.calls[stop_index + 1 :])
+        )
 
     def test_read_only_disconnect_does_not_change_hardware_state(self):
         ctl, sdk = controller(allow_motion=False)

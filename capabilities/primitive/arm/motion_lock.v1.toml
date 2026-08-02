@@ -1,0 +1,9 @@
+[contract]
+id = "robonix/primitive/arm/motion_lock"
+version = "1"
+kind = "primitive"
+idl = "piper_arm/srv/SetMotionLock.srv"
+description = "Operator-only runtime motion lock. Locking immediately stops active Piper motion; unlocking requires the current local operator token. This contract is intentionally gRPC-only and must not be exposed as an MCP tool."
+
+[mode]
+type = "rpc"

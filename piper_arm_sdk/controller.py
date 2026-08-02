@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 import logging
 import math
@@ -194,7 +195,15 @@ class PiperController:
         self._sdk = sdk
         self.arm_label = arm_label
         self.can_port = can_port
-        self.allow_motion = allow_motion
+        self._motion_allowed = threading.Event()
+        if allow_motion:
+            self._motion_allowed.set()
+        # Long-running operations hold _lock while waiting for feedback. Keep
+        # SDK writes behind a separate lock so a runtime lock can interrupt
+        # them without waiting for the operation to finish.
+        self._motion_command_lock = threading.Lock()
+        self._motion_epoch = 0
+        self._motion_context = threading.local()
         self.max_jog_deg = float(max_jog_deg)
         self.max_trajectory_waypoints = int(max_trajectory_waypoints)
         self.default_speed_percent = int(default_speed_percent)
@@ -225,6 +234,38 @@ class PiperController:
         self._actuation_issued = False
         self._gripper_actuation_issued = False
         self._lock = threading.RLock()
+
+    @property
+    def allow_motion(self) -> bool:
+        """Return the current runtime motion-gate state."""
+        return self._motion_allowed.is_set()
+
+    def set_motion_locked(self, locked: bool) -> bool:
+        """Change the runtime motion gate without waiting for an active move.
+
+        Locking clears the software gate before serializing with the current
+        SDK write, then sends Piper's fast stop. Unlocking releases that fast
+        stop before reopening the software gate. Authorization belongs to the
+        provider's operator-only RPC, not to this hardware-control layer.
+        """
+        self._require_connected()
+        if locked:
+            # Fail closed immediately. Clear again after acquiring the command
+            # lock so concurrent lock/unlock requests have deterministic order.
+            self._motion_allowed.clear()
+            with self._motion_command_lock:
+                self._motion_allowed.clear()
+                self._motion_epoch += 1
+                self._sdk.EmergencyStop(0x01)
+            return True
+
+        with self._motion_command_lock:
+            self._require_connected()
+            if self._motion_allowed.is_set():
+                return False
+            self._sdk.EmergencyStop(0x02)
+            self._motion_allowed.set()
+        return False
 
     def connect(self) -> None:
         with self._lock:
@@ -313,7 +354,7 @@ class PiperController:
             if gripper_fault:
                 detail += f"; gripper fault status=0x{gripper_status_code:02x}"
             if not self.allow_motion:
-                detail += "; motion locked (set ROBONIX_ALLOW_MOTION=1 before boot)"
+                detail += "; motion locked (operator authorization required to unlock)"
             return PiperState(
                 connected=True,
                 enabled=enabled,
@@ -453,14 +494,15 @@ class PiperController:
         )
 
     def set_enabled(self, enabled: bool) -> bool:
-        with self._lock:
+        motion_scope = self._motion_operation() if enabled else nullcontext()
+        with motion_scope, self._lock:
             self._require_connected()
             if enabled:
                 self._require_motion_unlocked()
                 if self._motors_enabled():
                     return True
                 self._actuation_issued = True
-                self._sdk.EmergencyStop(0x02)
+                self._send_motion_command(self._sdk.EmergencyStop, 0x02)
                 self._ensure_can_command_mode(self.default_speed_percent)
                 deadline = time.monotonic() + self.feedback_timeout_s
                 while time.monotonic() < deadline:
@@ -472,7 +514,7 @@ class PiperController:
                     # independently controlled actuator.
                     for motor_num in range(1, 7):
                         if not motor_states[motor_num - 1]:
-                            self._sdk.EnableArm(motor_num)
+                            self._send_motion_command(self._sdk.EnableArm, motor_num)
                             time.sleep(self.command_period_s)
                     if self._motors_enabled():
                         return True
@@ -500,7 +542,8 @@ class PiperController:
             raise PiperControlError("arm disable timed out")
 
     def set_gripper_enabled(self, enabled: bool, effort_nm: float = 1.0) -> bool:
-        with self._lock:
+        motion_scope = self._motion_operation() if enabled else nullcontext()
+        with motion_scope, self._lock:
             self._require_connected()
             feedback = self._read_gripper_feedback()
             current_enabled = bool(feedback.foc_status.driver_enable_status)
@@ -537,7 +580,7 @@ class PiperController:
             raise PiperControlError("gripper disable timed out")
 
     def set_gripper_zero(self, fully_closed_confirmed: bool) -> float:
-        with self._lock:
+        with self._motion_operation(), self._lock:
             self._require_connected()
             self._require_motion_unlocked()
             if not fully_closed_confirmed:
@@ -567,9 +610,9 @@ class PiperController:
                 )
 
             # Piper requires a disabled command before accepting 0xAE as zero.
-            self._sdk.GripperCtrl(0, 1000, 0x00, 0)
+            self._send_motion_command(self._sdk.GripperCtrl, 0, 1000, 0x00, 0)
             time.sleep(self.gripper_zero_settle_s)
-            self._sdk.GripperCtrl(0, 1000, 0x00, 0xAE)
+            self._send_motion_command(self._sdk.GripperCtrl, 0, 1000, 0x00, 0xAE)
 
             settled_samples = 0
             deadline = time.monotonic() + self.feedback_timeout_s
@@ -597,7 +640,7 @@ class PiperController:
             raise PiperControlError("gripper zero command was not confirmed by feedback")
 
     def jog_joint(self, joint: int, delta_deg: float, speed_percent: int) -> tuple[float, ...]:
-        with self._lock:
+        with self._motion_operation(), self._lock:
             self._require_connected()
             self._require_motion_unlocked()
             if joint < 1 or joint > 6:
@@ -654,7 +697,7 @@ class PiperController:
         Each target must settle on all six axes before the next target starts.
         A runtime failure reports completed progress and leaves the arm enabled.
         """
-        with self._lock:
+        with self._motion_operation(), self._lock:
             self._require_connected()
             self._require_motion_unlocked()
             trajectory = self._validate_joint_trajectory(waypoints)
@@ -700,7 +743,7 @@ class PiperController:
     def set_gripper(
         self, opening_m: float, effort_nm: float
     ) -> GripperCommandResult:
-        with self._lock:
+        with self._motion_operation(), self._lock:
             self._require_connected()
             self._require_motion_unlocked()
             if not math.isfinite(opening_m) or not 0.0 <= opening_m <= self.gripper_max_opening_m:
@@ -752,6 +795,8 @@ class PiperController:
                     initial_opening_m=initial_opening_m,
                 )
             except Exception as motion_error:
+                if not self.allow_motion:
+                    raise
                 try:
                     self._ensure_arm_enabled_after_gripper()
                 except Exception as recovery_error:
@@ -766,9 +811,9 @@ class PiperController:
             )
 
     def emergency_stop(self) -> None:
-        with self._lock:
-            self._require_connected()
-            self._sdk.EmergencyStop(0x01)
+        # Emergency stop is also a runtime lock. It must not wait behind the
+        # long-running operation lock or allow that operation to resume.
+        self.set_motion_locked(True)
 
     def _validate_current_joint_envelope(self, joints_deg: Sequence[float]) -> None:
         if len(joints_deg) != 6:
@@ -889,7 +934,9 @@ class PiperController:
     def _ensure_can_command_mode(self, speed_percent: int) -> None:
         deadline = time.monotonic() + self.feedback_timeout_s
         while time.monotonic() < deadline:
-            self._sdk.MotionCtrl_2(0x01, 0x01, speed_percent, 0x00)
+            self._send_motion_command(
+                self._sdk.MotionCtrl_2, 0x01, 0x01, speed_percent, 0x00
+            )
             if int(self._sdk.GetArmStatus().arm_status.ctrl_mode) == 0x01:
                 return
             time.sleep(self.command_period_s)
@@ -904,7 +951,9 @@ class PiperController:
         deadline = time.monotonic() + self.feedback_timeout_s
         while time.monotonic() < deadline:
             current = int(self._read_gripper_feedback().grippers_angle)
-            self._sdk.GripperCtrl(current, raw_effort, enable_code, 0)
+            self._send_motion_command(
+                self._sdk.GripperCtrl, current, raw_effort, enable_code, 0
+            )
             if bool(self._read_gripper_feedback().foc_status.driver_enable_status):
                 return
             time.sleep(self.command_period_s)
@@ -922,6 +971,7 @@ class PiperController:
         restored = False
         transient_communication_error = False
         while time.monotonic() < deadline:
+            self._require_motion_unlocked()
             motor_states = self._motor_enable_states()
             arm_status = self._sdk.GetArmStatus().arm_status
             error_code = int(arm_status.err_code)
@@ -966,7 +1016,7 @@ class PiperController:
                     restored = True
                 for motor_num in range(1, 7):
                     if not motor_states[motor_num - 1]:
-                        self._sdk.EnableArm(motor_num)
+                        self._send_motion_command(self._sdk.EnableArm, motor_num)
                         time.sleep(self.command_period_s)
             time.sleep(self.command_period_s)
 
@@ -984,8 +1034,10 @@ class PiperController:
         self._ensure_can_command_mode(speed_percent)
         deadline = time.monotonic() + self.motion_timeout_s
         while time.monotonic() < deadline:
-            self._sdk.MotionCtrl_2(0x01, 0x01, speed_percent, 0x00)
-            self._sdk.JointCtrl(*raw_targets)
+            self._send_motion_command(
+                self._sdk.MotionCtrl_2, 0x01, 0x01, speed_percent, 0x00
+            )
+            self._send_motion_command(self._sdk.JointCtrl, *raw_targets)
             current = self._read_joints_deg()[joint_index]
             if abs(current - target_deg) <= self.joint_position_tolerance_deg:
                 return
@@ -1013,8 +1065,10 @@ class PiperController:
                 raise PiperControlError(
                     f"Piper error_code={error_code} while moving to {waypoint_name!r}"
                 )
-            self._sdk.MotionCtrl_2(0x01, 0x01, speed_percent, 0x00)
-            self._sdk.JointCtrl(*raw_targets)
+            self._send_motion_command(
+                self._sdk.MotionCtrl_2, 0x01, 0x01, speed_percent, 0x00
+            )
+            self._send_motion_command(self._sdk.JointCtrl, *raw_targets)
             current = self._read_joints_deg()
             last_errors = tuple(
                 abs(actual - target)
@@ -1060,10 +1114,16 @@ class PiperController:
         max_closure_m = 0.0
         deadline = time.monotonic() + self.motion_timeout_s
         while time.monotonic() < deadline:
-            self._sdk.MotionCtrl_2(
-                0x01, 0x01, self.default_speed_percent, 0x00
+            self._send_motion_command(
+                self._sdk.MotionCtrl_2,
+                0x01,
+                0x01,
+                self.default_speed_percent,
+                0x00,
             )
-            self._sdk.GripperCtrl(raw_opening, raw_effort, 0x01, 0)
+            self._send_motion_command(
+                self._sdk.GripperCtrl, raw_opening, raw_effort, 0x01, 0
+            )
             feedback = self._read_gripper_feedback()
             status_code = int(feedback.status_code)
             if status_code & 0x3F:
@@ -1129,5 +1189,41 @@ class PiperController:
     def _require_motion_unlocked(self) -> None:
         if not self.allow_motion:
             raise PiperControlError(
-                "hardware motion is locked; set ROBONIX_ALLOW_MOTION=1 before rbnx boot"
+                "hardware motion is locked; operator authorization is required to unlock"
             )
+
+    @contextmanager
+    def _motion_operation(self):
+        """Bind one public operation to the gate generation it started in."""
+        depth = int(getattr(self._motion_context, "depth", 0))
+        if depth == 0:
+            with self._motion_command_lock:
+                self._require_motion_unlocked()
+                self._motion_context.epoch = self._motion_epoch
+        self._motion_context.depth = depth + 1
+        try:
+            yield
+            if depth == 0:
+                with self._motion_command_lock:
+                    self._require_motion_operation_current()
+        finally:
+            if depth == 0:
+                for attribute in ("depth", "epoch"):
+                    try:
+                        delattr(self._motion_context, attribute)
+                    except AttributeError:
+                        pass
+            else:
+                self._motion_context.depth = depth
+
+    def _require_motion_operation_current(self) -> None:
+        self._require_motion_unlocked()
+        operation_epoch = getattr(self._motion_context, "epoch", None)
+        if operation_epoch is not None and operation_epoch != self._motion_epoch:
+            raise PiperControlError("motion operation was cancelled by runtime lock")
+
+    def _send_motion_command(self, command: Any, *args: Any) -> None:
+        """Serialize an SDK write with runtime lock transitions."""
+        with self._motion_command_lock:
+            self._require_motion_operation_current()
+            command(*args)

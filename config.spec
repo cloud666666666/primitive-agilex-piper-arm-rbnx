@@ -28,8 +28,9 @@ config:
   # Use a stable value such as left or right.
   arm_label: left
 
-  # boolean, default: false. Deployment safety gate; the
-  # ROBONIX_ALLOW_MOTION environment switch can override it at boot.
+  # boolean, default: false. Initial deployment safety-gate state; the
+  # ROBONIX_ALLOW_MOTION environment switch can override it at boot. Runtime
+  # unlock uses the operator-only motion_lock gRPC interface and session token.
   allow_motion: false
 
   # float, degrees, default: 5.0; must be > 0.

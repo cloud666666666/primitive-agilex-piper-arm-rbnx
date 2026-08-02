@@ -34,5 +34,6 @@ capabilities:
   - name: robonix/primitive/arm/set_gripper
   - name: robonix/primitive/arm/set_gripper_zero
   - name: robonix/primitive/arm/emergency_stop
+  - name: robonix/primitive/arm/motion_lock
   - name: robonix/primitive/health/state
   - name: robonix/primitive/health/stream

@@ -3,7 +3,7 @@ id = "robonix/primitive/arm/emergency_stop"
 version = "1"
 kind = "primitive"
 idl = "piper_arm/srv/EmergencyStop.srv"
-description = "Immediately send the Piper fast emergency-stop command. This capability is always allowed."
+description = "Immediately send the Piper fast emergency-stop command and close the runtime motion gate. This capability is always allowed."
 
 [mode]
 type = "rpc"
