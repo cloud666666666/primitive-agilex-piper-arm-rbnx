@@ -74,6 +74,11 @@ rbnx-build/venv/bin/python scripts/motion_lock.py lock --provider left_piper
 rbnx-build/venv/bin/python scripts/motion_lock.py unlock --provider left_piper
 ```
 
+When the runtime gate is locked, SDK MCP `status` and lock-rejected motion
+responses include an absolute, provider-specific version of the unlock command
+in `detail`. This lets Pilot relay the exact command while the gRPC-only contract
+and owner-readable token continue to prevent Pilot from unlocking the arm.
+
 Locking never requires a token. Unlocking reads
 `rbnx-build/data/<provider>.motion-token`; the token is replaced on every SDK
 backend activation and removed on deactivate or shutdown. The script rejects a

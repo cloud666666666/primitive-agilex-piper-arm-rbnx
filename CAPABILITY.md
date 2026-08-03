@@ -127,5 +127,11 @@ joint, trajectory, gripper, or gripper-zero command. If the script or the status
 check fails, keep motion blocked and ask the operator to inspect that provider's
 logs rather than retrying movement.
 
+This handoff is also included directly in the `detail` field whenever `status`
+reports a locked gate or an MCP motion request is rejected by that gate. The
+returned command uses the active provider ID and absolute package paths, so Pilot
+must quote that exact command to the operator instead of giving a generic safety
+console or hardware-authorization instruction.
+
 The primitive does not provide Cartesian, collision-aware, perception, or
 camera-guided motion. Never infer a named pose from this interface.

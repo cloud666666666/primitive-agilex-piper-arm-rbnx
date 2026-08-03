@@ -13,6 +13,7 @@ import logging
 import os
 from pathlib import Path
 import secrets
+import shlex
 import tempfile
 import threading
 from typing import Any
@@ -90,13 +91,48 @@ def _operator_confirmed_gripper_zero(cfg: dict[str, Any]) -> bool:
     return _as_bool(os.environ.get(f"ROBONIX_CONFIRM_{arm_label}_GRIPPER_ZERO", "0"))
 
 
+def _provider_id() -> str:
+    return os.environ.get("RBNX_INSTANCE_NAME", piper_arm.id).strip() or piper_arm.id
+
+
 def _motion_token_file() -> Path:
-    provider_id = os.environ.get("RBNX_INSTANCE_NAME", piper_arm.id).strip()
     safe_provider_id = "".join(
         char if char.isalnum() or char in {"-", "_"} else "_"
-        for char in provider_id
+        for char in _provider_id()
     )
     return piper_arm.pkg_root / "rbnx-build" / "data" / f"{safe_provider_id}.motion-token"
+
+
+def _operator_unlock_command() -> str:
+    """Return a copyable command without exposing the session token."""
+    package_root = Path(piper_arm.pkg_root)
+    argv = (
+        package_root / "rbnx-build" / "venv" / "bin" / "python",
+        package_root / "scripts" / "motion_lock.py",
+        "unlock",
+        "--provider",
+        _provider_id(),
+    )
+    return " ".join(shlex.quote(str(argument)) for argument in argv)
+
+
+def _locked_motion_handoff() -> str:
+    return (
+        "Pilot cannot unlock motion. Tell the operator to run "
+        f"`{_operator_unlock_command()}` as the OS user that started this provider; "
+        "do not request or reveal the token. After the command succeeds, call status "
+        "again and require motion_unlocked=true before retrying motion"
+    )
+
+
+def _mcp_error_detail(exc: Exception) -> str:
+    """Attach operator handoff only to errors caused by the runtime gate."""
+    detail = str(exc)
+    controller = _controller
+    lock_error = "motion is locked" in detail or "runtime lock" in detail
+    if controller is not None and not controller.allow_motion and lock_error:
+        return f"{detail}; {_locked_motion_handoff()}"
+    return detail
 
 
 def _revoke_operator_token() -> None:
@@ -237,9 +273,14 @@ def motion_lock(
 @piper_arm.mcp("robonix/primitive/arm/status")
 def status(_req: GetStatus_Request) -> GetStatus_Response:
     """Read this provider's live arm and factory-gripper state without moving it.
-    Call before motion and choose left_piper or right_piper by provider name."""
+    Call before motion and choose left_piper or right_piper by provider name. A
+    locked response includes the exact operator-only unlock command for Pilot to
+    relay; Pilot must not execute that command itself."""
     try:
         state = _require_controller().status()
+        detail = state.detail
+        if not state.motion_unlocked:
+            detail = f"{detail}; {_locked_motion_handoff()}"
         return GetStatus_Response(
             connected=state.connected,
             enabled=state.enabled,
@@ -261,7 +302,7 @@ def status(_req: GetStatus_Request) -> GetStatus_Response:
             gripper_fault=state.gripper_fault,
             gripper_status_code=state.gripper_status_code,
             error_code=state.error_code,
-            detail=state.detail,
+            detail=detail,
         )
     except Exception as exc:  # noqa: BLE001
         return GetStatus_Response(
@@ -303,7 +344,12 @@ def set_enabled(req: SetEnabled_Request) -> SetEnabled_Response:
             detail=f"{arm} arm {'enabled' if enabled else 'disabled'}",
         )
     except Exception as exc:  # noqa: BLE001
-        return SetEnabled_Response(success=False, enabled=False, arm=arm, detail=str(exc))
+        return SetEnabled_Response(
+            success=False,
+            enabled=False,
+            arm=arm,
+            detail=_mcp_error_detail(exc),
+        )
 
 
 @piper_arm.mcp("robonix/primitive/arm/enable_arm")
@@ -317,7 +363,12 @@ def enable_arm(_req: EnableArm_Request) -> EnableArm_Response:
             success=True, enabled=enabled, arm=arm, detail=f"{arm} arm enabled"
         )
     except Exception as exc:  # noqa: BLE001
-        return EnableArm_Response(success=False, enabled=False, arm=arm, detail=str(exc))
+        return EnableArm_Response(
+            success=False,
+            enabled=False,
+            arm=arm,
+            detail=_mcp_error_detail(exc),
+        )
 
 
 @piper_arm.mcp("robonix/primitive/arm/disable_arm")
@@ -349,7 +400,10 @@ def enable_gripper(_req: EnableGripper_Request) -> EnableGripper_Response:
         )
     except Exception as exc:  # noqa: BLE001
         return EnableGripper_Response(
-            success=False, enabled=False, arm=arm, detail=str(exc)
+            success=False,
+            enabled=False,
+            arm=arm,
+            detail=_mcp_error_detail(exc),
         )
 
 
@@ -390,7 +444,12 @@ def jog_joint(req: JogJoint_Request) -> JogJoint_Response:
             detail=f"{arm} joint{int(req.joint)} jog completed",
         )
     except Exception as exc:  # noqa: BLE001
-        return JogJoint_Response(success=False, arm=arm, target_joints_deg=[], detail=str(exc))
+        return JogJoint_Response(
+            success=False,
+            arm=arm,
+            target_joints_deg=[],
+            detail=_mcp_error_detail(exc),
+        )
 
 
 @piper_arm.mcp("robonix/primitive/arm/execute_joint_trajectory")
@@ -431,7 +490,7 @@ def execute_joint_trajectory(
             completed_waypoints=exc.completed_waypoints,
             failed_waypoint=exc.failed_waypoint,
             final_joints_deg=list(exc.final_joints_deg),
-            detail=str(exc),
+            detail=_mcp_error_detail(exc),
         )
     except Exception as exc:  # noqa: BLE001
         return ExecuteJointTrajectory_Response(
@@ -440,7 +499,7 @@ def execute_joint_trajectory(
             completed_waypoints=0,
             failed_waypoint="",
             final_joints_deg=[],
-            detail=str(exc),
+            detail=_mcp_error_detail(exc),
         )
 
 
@@ -472,7 +531,7 @@ def set_gripper(req: SetGripper_Request) -> SetGripper_Response:
             arm=arm,
             opening_m=0.0,
             contact_detected=False,
-            detail=str(exc),
+            detail=_mcp_error_detail(exc),
         )
 
 
@@ -501,7 +560,7 @@ def set_gripper_zero(req: SetGripperZero_Request) -> SetGripperZero_Response:
             arm=arm,
             opening_m=0.0,
             homed=False,
-            detail=str(exc),
+            detail=_mcp_error_detail(exc),
         )
 
 

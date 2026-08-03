@@ -3,6 +3,7 @@ from __future__ import annotations
 import stat
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -21,6 +22,43 @@ class FakeController:
         self.calls.append(locked)
         self.allow_motion = not locked
         return locked
+
+
+class LockedMcpController:
+    def __init__(self) -> None:
+        self.allow_motion = False
+        self.enable_calls: list[bool] = []
+
+    def status(self):
+        return SimpleNamespace(
+            connected=True,
+            enabled=False,
+            motion_unlocked=False,
+            arm="left",
+            can_port="can_left",
+            joints_deg=(0.0,) * 6,
+            telemetry_valid=True,
+            joint_voltages_v=(24.0,) * 6,
+            joint_currents_a=(0.0,) * 6,
+            joint_motor_temperatures_c=(30.0,) * 6,
+            joint_driver_temperatures_c=(30.0,) * 6,
+            joint_driver_enabled=(False,) * 6,
+            joint_communication_ok=(True,) * 6,
+            joint_fault_codes=(0,) * 6,
+            gripper_opening_m=0.0,
+            gripper_enabled=False,
+            gripper_homed=True,
+            gripper_fault=False,
+            gripper_status_code=0x80,
+            error_code=0,
+            detail="ready; motion locked",
+        )
+
+    def set_enabled(self, enabled: bool) -> bool:
+        self.enable_calls.append(enabled)
+        raise main.PiperControlError(
+            "hardware motion is locked; operator authorization is required to unlock"
+        )
 
 
 class MotionLockAuthorizationTests(unittest.TestCase):
@@ -88,6 +126,37 @@ class MotionLockAuthorizationTests(unittest.TestCase):
 
         self.assertIn(contract, grpc_contracts)
         self.assertNotIn(contract, mcp_contracts)
+
+    def test_locked_status_gives_pilot_exact_operator_handoff(self) -> None:
+        main._controller = LockedMcpController()
+
+        with patch.dict(main.os.environ, {"RBNX_INSTANCE_NAME": "left_piper"}):
+            response = main.status(object())
+
+        self.assertFalse(response.motion_unlocked)
+        self.assertIn("Pilot cannot unlock motion", response.detail)
+        self.assertIn("scripts/motion_lock.py unlock --provider left_piper", response.detail)
+        self.assertIn("require motion_unlocked=true", response.detail)
+        self.assertNotIn("current-token", response.detail)
+
+    def test_lock_rejected_mcp_call_gives_same_operator_handoff(self) -> None:
+        controller = LockedMcpController()
+        main._controller = controller
+
+        with patch.dict(main.os.environ, {"RBNX_INSTANCE_NAME": "left_piper"}):
+            response = main.enable_arm(object())
+
+        self.assertFalse(response.success)
+        self.assertEqual(controller.enable_calls, [True])
+        self.assertIn("Pilot cannot unlock motion", response.detail)
+        self.assertIn("scripts/motion_lock.py unlock --provider left_piper", response.detail)
+
+    def test_unrelated_error_does_not_suggest_unlock(self) -> None:
+        main._controller = FakeController(motion_unlocked=False)
+
+        detail = main._mcp_error_detail(RuntimeError("CAN write failed"))
+
+        self.assertEqual(detail, "CAN write failed")
 
     def test_unlock_accepts_current_operator_token(self) -> None:
         controller = FakeController(motion_unlocked=False)
