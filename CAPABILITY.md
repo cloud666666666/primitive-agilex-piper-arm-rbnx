@@ -104,5 +104,28 @@ operator capability is intentionally not registered as an MCP tool.
 choose only the initial motion-gate state during activation. They do not bypass
 authorization for a later runtime unlock.
 
+## Locked-motion operator handoff
+
+When `status` reports `motion_unlocked=false`, or a motion capability reports
+that hardware motion is locked, Pilot must not retry the motion or attempt to
+unlock the arm itself. Pilot must tell the user to run the following command on
+the robot host from this Piper package's root directory:
+
+```bash
+rbnx-build/venv/bin/python scripts/motion_lock.py unlock \
+  --provider <provider-id>
+```
+
+Replace `<provider-id>` with the provider selected for the failed request, such
+as `left_piper` or `right_piper`. The command must run as the OS user that owns
+the active provider's local `0600` token file. Pilot must not ask the user to
+reveal the token, print it, or try to call the gRPC unlock capability directly.
+
+After the user reports that the command succeeded, Pilot must call `status` on
+the same provider and verify `motion_unlocked=true` before retrying any enable,
+joint, trajectory, gripper, or gripper-zero command. If the script or the status
+check fails, keep motion blocked and ask the operator to inspect that provider's
+logs rather than retrying movement.
+
 The primitive does not provide Cartesian, collision-aware, perception, or
 camera-guided motion. Never infer a named pose from this interface.
