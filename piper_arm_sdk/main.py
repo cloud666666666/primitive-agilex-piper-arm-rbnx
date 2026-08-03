@@ -194,16 +194,23 @@ def motion_lock(
             arm=arm,
             detail="Piper primitive is not active",
         )
+    if not bool(req.locked):
+        expected = _operator_token
+        supplied = str(req.operator_token)
+        if (
+            expected is None
+            or not supplied
+            or not hmac.compare_digest(supplied, expected)
+        ):
+            locked = not controller.allow_motion
+            return piper_arm_pb2.SetMotionLock_Response(
+                success=False,
+                locked=locked,
+                motion_unlocked=not locked,
+                arm=arm,
+                detail="operator authorization required",
+            )
     try:
-        if not bool(req.locked):
-            expected = _operator_token
-            supplied = str(req.operator_token)
-            if (
-                expected is None
-                or not supplied
-                or not hmac.compare_digest(supplied, expected)
-            ):
-                raise PiperControlError("operator authorization failed")
         locked = controller.set_motion_locked(bool(req.locked))
         return piper_arm_pb2.SetMotionLock_Response(
             success=True,

@@ -53,8 +53,29 @@ class MotionLockAuthorizationTests(unittest.TestCase):
             )
             self.assertFalse(response.success)
             self.assertTrue(response.locked)
-            self.assertIn("authorization failed", response.detail)
+            self.assertFalse(response.motion_unlocked)
+            self.assertEqual(response.detail, "operator authorization required")
 
+        self.assertEqual(controller.calls, [])
+
+    def test_invalid_unlock_reports_already_unlocked_state_without_controller_call(
+        self,
+    ) -> None:
+        controller = FakeController(motion_unlocked=True)
+        main._controller = controller
+        main._operator_token = "expected-token"
+
+        response = main.motion_lock(
+            piper_arm_pb2.SetMotionLock_Request(
+                locked=False,
+                operator_token="wrong-token",
+            )
+        )
+
+        self.assertFalse(response.success)
+        self.assertFalse(response.locked)
+        self.assertTrue(response.motion_unlocked)
+        self.assertEqual(response.detail, "operator authorization required")
         self.assertEqual(controller.calls, [])
 
     def test_motion_lock_is_registered_for_grpc_only(self) -> None:
@@ -101,6 +122,28 @@ class MotionLockAuthorizationTests(unittest.TestCase):
         self.assertTrue(response.locked)
         self.assertFalse(response.motion_unlocked)
         self.assertEqual(controller.calls, [True])
+
+    def test_controller_failure_remains_on_hardware_error_path(self) -> None:
+        controller = FakeController(motion_unlocked=False)
+        main._controller = controller
+
+        with patch.object(
+            controller,
+            "set_motion_locked",
+            side_effect=RuntimeError("CAN write failed"),
+        ) as set_motion_locked:
+            response = main.motion_lock(
+                piper_arm_pb2.SetMotionLock_Request(
+                    locked=True,
+                    operator_token="",
+                )
+            )
+
+        self.assertFalse(response.success)
+        self.assertTrue(response.locked)
+        self.assertFalse(response.motion_unlocked)
+        self.assertEqual(response.detail, "CAN write failed")
+        set_motion_locked.assert_called_once_with(True)
 
     def test_operator_token_is_owner_only_and_revoked(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
