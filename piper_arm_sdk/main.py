@@ -631,6 +631,9 @@ def activate():
             gripper_zero_max_offset_m=float(
                 _config.get("gripper_zero_max_offset_m", 0.01)
             ),
+            gripper_zero_confirmation_tolerance_m=float(
+                _config.get("gripper_zero_confirmation_tolerance_m", 0.0005)
+            ),
             gripper_zero_settle_s=float(
                 _config.get("gripper_zero_settle_s", 1.5)
             ),

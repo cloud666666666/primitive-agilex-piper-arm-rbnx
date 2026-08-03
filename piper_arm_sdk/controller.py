@@ -118,6 +118,7 @@ class PiperController:
         gripper_multiplier: float = 1.0,
         max_gripper_effort_nm: float = 1.5,
         gripper_zero_max_offset_m: float = 0.01,
+        gripper_zero_confirmation_tolerance_m: float = 0.0005,
         gripper_zero_settle_s: float = 1.5,
         gripper_position_tolerance_m: float = 0.001,
         gripper_arm_stability_s: float = 1.25,
@@ -152,6 +153,15 @@ class PiperController:
         if not 0.001 <= gripper_zero_max_offset_m <= gripper_max_opening_m:
             raise ValueError(
                 "gripper_zero_max_offset_m must be between 0.001 and the maximum opening"
+            )
+        if not (
+            0.0001
+            <= gripper_zero_confirmation_tolerance_m
+            <= gripper_zero_max_offset_m
+        ):
+            raise ValueError(
+                "gripper_zero_confirmation_tolerance_m must be between 0.0001 "
+                "and gripper_zero_max_offset_m"
             )
         if not 0.0 <= gripper_zero_settle_s <= 10.0:
             raise ValueError("gripper_zero_settle_s must be between 0 and 10")
@@ -215,6 +225,9 @@ class PiperController:
         self.gripper_multiplier = float(gripper_multiplier)
         self.max_gripper_effort_nm = float(max_gripper_effort_nm)
         self.gripper_zero_max_offset_m = float(gripper_zero_max_offset_m)
+        self.gripper_zero_confirmation_tolerance_m = float(
+            gripper_zero_confirmation_tolerance_m
+        )
         self.gripper_zero_settle_s = float(gripper_zero_settle_s)
         self.gripper_position_tolerance_m = float(gripper_position_tolerance_m)
         self.gripper_arm_stability_s = float(gripper_arm_stability_s)
@@ -620,6 +633,7 @@ class PiperController:
             self._send_motion_command(self._sdk.GripperCtrl, 0, 1000, 0x00, 0xAE)
 
             settled_samples = 0
+            current_opening_m = opening_m
             deadline = time.monotonic() + self.feedback_timeout_s
             while time.monotonic() < deadline:
                 current_feedback = self._read_gripper_feedback()
@@ -633,7 +647,8 @@ class PiperController:
                     )
                 if (
                     not bool(current_feedback.foc_status.driver_enable_status)
-                    and abs(current_opening_m) <= 0.0005
+                    and abs(current_opening_m)
+                    <= self.gripper_zero_confirmation_tolerance_m
                 ):
                     settled_samples += 1
                     if settled_samples >= 3:
@@ -642,7 +657,11 @@ class PiperController:
                 else:
                     settled_samples = 0
                 time.sleep(self.command_period_s)
-            raise PiperControlError("gripper zero command was not confirmed by feedback")
+            raise PiperControlError(
+                "gripper zero command was not confirmed by feedback; "
+                f"final={current_opening_m:.4f} m, confirmation_tolerance="
+                f"+/-{self.gripper_zero_confirmation_tolerance_m:.4f} m"
+            )
 
     def jog_joint(self, joint: int, delta_deg: float, speed_percent: int) -> tuple[float, ...]:
         with self._motion_operation(), self._lock:

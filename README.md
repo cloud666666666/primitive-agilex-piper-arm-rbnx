@@ -262,6 +262,7 @@ primitive:
       arm_label: left
       can_port: can_left
       allow_motion: false
+      gripper_zero_confirmation_tolerance_m: 0.0005
 
   - name: right_piper
     path: ./primitives/piper_arm
@@ -270,7 +271,15 @@ primitive:
       arm_label: right
       can_port: can_right
       allow_motion: false
+      gripper_zero_confirmation_tolerance_m: 0.0005
 ```
+
+`gripper_zero_confirmation_tolerance_m` is the maximum absolute feedback
+accepted after the SDK sends `0xAE`. It defaults to `0.0005` m and may be tuned
+independently for each physical gripper, but it must remain between `0.0001` m
+and that instance's `gripper_zero_max_offset_m`. Use the smallest value supported
+by measured hardware feedback: increasing it can accept a residual value that
+would otherwise reveal an ignored zero command.
 
 `scripts/build.sh` automatically fetches the tested `piper_sdk` 0.2.20 source
 at commit `4eddfcf817cd87de9acee316a72cf5b988025378`. The checkout is stored under

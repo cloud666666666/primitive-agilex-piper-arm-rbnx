@@ -121,6 +121,7 @@ def controller(
     operator_confirmed_gripper_zero: bool = False,
     gripper_arm_stability_s: float = 0.0,
     gripper_position_tolerance_m: float = 0.001,
+    gripper_zero_confirmation_tolerance_m: float = 0.0005,
     gripper_contact_min_closure_m: float = 0.003,
     gripper_contact_stability_s: float = 0.02,
     joint_position_tolerance_deg: float = 1.5,
@@ -139,6 +140,9 @@ def controller(
         motion_timeout_s=motion_timeout_s,
         joint_position_tolerance_deg=joint_position_tolerance_deg,
         gripper_zero_settle_s=0.0,
+        gripper_zero_confirmation_tolerance_m=(
+            gripper_zero_confirmation_tolerance_m
+        ),
         gripper_position_tolerance_m=gripper_position_tolerance_m,
         gripper_arm_stability_s=gripper_arm_stability_s,
         gripper_contact_min_closure_m=gripper_contact_min_closure_m,
@@ -781,6 +785,40 @@ class PiperControllerTest(unittest.TestCase):
         result = ctl.set_gripper(0.04, 1.0)
         self.assertAlmostEqual(result.opening_m, 0.04)
         self.assertFalse(result.contact_detected)
+
+    def test_set_gripper_zero_uses_configured_confirmation_tolerance(self):
+        ctl, sdk = controller(
+            allow_motion=True,
+            gripper_zero_confirmation_tolerance_m=0.002,
+        )
+        sdk.gripper = -1700
+        sdk.gripper_status = 0
+
+        def retain_residual_feedback(opening, effort, code, zero):
+            sdk.calls.append(("gripper", opening, effort, code, zero))
+
+        sdk.GripperCtrl = retain_residual_feedback
+
+        opening = ctl.set_gripper_zero(True)
+
+        self.assertAlmostEqual(opening, -0.0017)
+        self.assertTrue(ctl.operator_confirmed_gripper_zero)
+
+    def test_set_gripper_zero_default_tolerance_rejects_residual_feedback(self):
+        ctl, sdk = controller(allow_motion=True, feedback_timeout_s=0.05)
+        sdk.gripper = -1700
+        sdk.gripper_status = 0
+
+        def retain_residual_feedback(opening, effort, code, zero):
+            sdk.calls.append(("gripper", opening, effort, code, zero))
+
+        sdk.GripperCtrl = retain_residual_feedback
+
+        with self.assertRaisesRegex(
+            PiperControlError,
+            r"final=-0\.0017 m, confirmation_tolerance=\+/-0\.0005 m",
+        ):
+            ctl.set_gripper_zero(True)
 
     def test_gripper_timeout_keeps_existing_enable_state(self):
         ctl, sdk = controller(allow_motion=True)

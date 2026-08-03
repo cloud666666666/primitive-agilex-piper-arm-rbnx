@@ -65,6 +65,11 @@ config:
   # Reject zeroing when the manually closed encoder offset exceeds this value.
   gripper_zero_max_offset_m: 0.01
 
+  # float, metres, default: 0.0005; range:
+  # 0.0001..gripper_zero_max_offset_m. Maximum absolute feedback accepted after
+  # the 0xAE zero command. Tune per gripper from measured hardware behavior.
+  gripper_zero_confirmation_tolerance_m: 0.0005
+
   # float, seconds, default: 1.5; range: 0..10.
   gripper_zero_settle_s: 1.5
 

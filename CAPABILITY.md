@@ -88,8 +88,12 @@ before every movement. The operator must first call `disable_gripper`, verify
 may remain enabled because their state is independent. Zeroing rejects an
 enabled gripper without sending a command, rejects encoder offsets greater than
 10 mm, follows the Piper disabled-command-and-0xAE sequence, verifies zero
-feedback, and leaves the gripper disabled. A timed-out gripper command reports
-failure without implicitly disabling the arm or gripper.
+feedback against the configured `gripper_zero_confirmation_tolerance_m`, and
+leaves the gripper disabled. This post-command tolerance defaults to 0.5 mm and
+may be tuned per physical gripper up to `gripper_zero_max_offset_m`; it is
+separate from the maximum pre-command offset. A timed-out gripper command reports
+the final feedback and active tolerance without implicitly disabling the arm or
+gripper.
 `emergency_stop` is always available, including while motion is locked. It also
 closes the runtime motion gate, so a stopped operation cannot resume or send a
 later trajectory frame. The same immediate stop behavior is used by the
