@@ -1,0 +1,9 @@
+[contract]
+id = "robonix/primitive/arm/execute_joint_trajectory"
+version = "1"
+kind = "primitive"
+idl = "piper_arm/srv/ExecuteJointTrajectory.srv"
+description = "Execute a bounded sequence of recorded absolute J1-J6 Piper waypoints, automatically enabling the arm, verifying every joint at each waypoint, and stopping the sequence on the first failure."
+
+[mode]
+type = "rpc"

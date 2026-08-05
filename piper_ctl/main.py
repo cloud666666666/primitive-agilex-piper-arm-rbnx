@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""piper_ctl_rbnx — AgileX Piper 6-DoF arm primitive.
+"""Unified AgileX Piper primitive with ROS 2 and direct-SDK backends.
 
-Owns `robonix/primitive/arm/*` for the piper_grasp deploy. Wraps the
-upstream `piper` ROS 2 driver (vendored under src/piper) which talks
-to the Piper arm's CAN bus via piper_sdk.
+The shared lifecycle selects `backend: ros2 | sdk` during CMD_INIT. The
+default ROS path wraps the vendored `piper` driver; the SDK path delegates to
+`piper_arm_sdk.main` and exposes its MCP, gripper and health handlers.
 
 Lifecycle (per Robonix developer guide §5):
     on_init       — light: validate cfg, cache for activate.
@@ -57,21 +57,15 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from robonix_api import Primitive, Ok, Err
+from robonix_api import Ok, Err
+
+from piper_provider import piper_arm as piper_ctl
 
 logging.basicConfig(
     level=os.environ.get("PIPER_LOG_LEVEL", "INFO"),
     format="[piper] %(message)s",
 )
 log = logging.getLogger("piper")
-
-# Provider id MUST match the deploy manifest's `primitive: - name:`
-# entry for this package (piper_grasp_deploy/robonix_manifest.yaml
-# uses `name: piper_ctl`).
-piper_ctl = Primitive(
-    id="piper_ctl",
-    namespace="robonix/primitive/arm",
-)
 
 _pkg_root: Path = Path(__file__).resolve().parent.parent
 
@@ -275,8 +269,7 @@ def _wait_for_joint_states(topic: str, timeout_s: float) -> bool:
 
 
 # ── lifecycle handlers ───────────────────────────────────────────────────
-@piper_ctl.on_init
-def init(cfg: dict):
+def _ros_init(cfg: dict):
     """REGISTERED → INACTIVE. Validate cfg + cache for activate.
 
     Light only — DO NOT touch CAN, DO NOT spawn ros2, DO NOT declare
@@ -305,8 +298,7 @@ def init(cfg: dict):
     return Ok()
 
 
-@piper_ctl.on_activate
-def activate():
+def _ros_activate():
     """INACTIVE → ACTIVE. (Optionally) bring up CAN, spawn
     start_single_piper.launch.py, wait for the first JointState, then
     atlas-declare the four data topics.
@@ -425,19 +417,61 @@ def activate():
     return Ok()
 
 
-@piper_ctl.on_deactivate
-def deactivate():
+def _ros_deactivate():
     """ACTIVE → INACTIVE. Kill the piper subprocess. Idempotent."""
     _kill_piper()
     log.info("CMD_DEACTIVATE ok")
     return Ok()
 
 
-@piper_ctl.on_shutdown
-def shutdown():
+def _ros_shutdown():
     """any → TERMINATED. Last-chance kill. Idempotent w/ on_deactivate."""
     _kill_piper()
     return Ok()
+
+
+# Importing the SDK module registers its MCP and health handlers on the shared
+# provider. It does not import or connect piper_sdk until SDK activation.
+from piper_arm_sdk import main as sdk_backend  # noqa: E402
+
+
+_backend = "ros2"
+
+
+@piper_ctl.on_init
+def init(cfg: dict):
+    """Select one backend from CMD_INIT config and validate its options."""
+    global _backend
+    cfg = dict(cfg or {})
+    backend = str(cfg.get("backend", "ros2")).strip().lower()
+    if backend not in {"ros2", "sdk"}:
+        return Err("backend must be 'ros2' or 'sdk'")
+    _backend = backend
+    log.info("selected backend=%s", backend)
+    if backend == "sdk":
+        return sdk_backend.init(cfg)
+    return _ros_init(cfg)
+
+
+@piper_ctl.on_activate
+def activate():
+    if _backend == "sdk":
+        return sdk_backend.activate()
+    return _ros_activate()
+
+
+@piper_ctl.on_deactivate
+def deactivate():
+    if _backend == "sdk":
+        return sdk_backend.deactivate()
+    return _ros_deactivate()
+
+
+@piper_ctl.on_shutdown
+def shutdown():
+    if _backend == "sdk":
+        return sdk_backend.shutdown()
+    return _ros_shutdown()
 
 
 if __name__ == "__main__":

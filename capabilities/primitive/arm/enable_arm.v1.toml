@@ -1,0 +1,9 @@
+[contract]
+id = "robonix/primitive/arm/enable_arm"
+version = "1"
+kind = "primitive"
+idl = "piper_arm/srv/EnableArm.srv"
+description = "Idempotently enable Piper joint drivers 1 through 6 without changing the factory gripper enable state or commanding a target pose."
+
+[mode]
+type = "rpc"

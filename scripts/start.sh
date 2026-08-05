@@ -1,32 +1,43 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
+
 PKG="${RBNX_PACKAGE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-cd "$PKG"
-
+VENV="$PKG/rbnx-build/venv"
 ROS_DISTRO="${ROS_DISTRO:-humble}"
-# shellcheck disable=SC1091
-set +u; source "/opt/ros/${ROS_DISTRO}/setup.bash"; set -u
 
-# rbnx-cli does NOT auto-source package build outputs anymore — each
-# package is responsible for sourcing its own colcon overlay here.
-# Source the vendored piper / piper_msgs / graspnet_msgs we built in
-# scripts/build.sh so `ros2 launch piper start_single_piper.launch.py`
-# in on_activate can find them.
+cd "$PKG"
+if [[ ! -x "$VENV/bin/python" ]]; then
+    echo "[piper_arm/start] ERR: build environment missing; run rbnx build first" >&2
+    exit 2
+fi
+
+# CMD_INIT delivers backend config only after this process registers, so the
+# Python lifecycle dispatcher selects ros2 or sdk. Source ROS opportunistically:
+# it is required by ros2 and harmless for sdk.
+if [[ -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]]; then
+    # shellcheck disable=SC1091
+    set +u; source "/opt/ros/${ROS_DISTRO}/setup.bash"; set -u
+fi
 if [[ -f "$PKG/rbnx-build/ws/install/setup.bash" ]]; then
     # shellcheck disable=SC1091
     set +u; source "$PKG/rbnx-build/ws/install/setup.bash"; set -u
-else
-    echo "[piper_ctl/start] ERR: colcon overlay missing at $PKG/rbnx-build/ws/install/" >&2
-    echo "[piper_ctl/start]      Run \`bash scripts/build.sh\` first." >&2
-    exit 2
+fi
+
+if [[ -z "${PIPER_SDK_PARENT:-}" && -f "$PKG/rbnx-build/piper_sdk.env" ]]; then
+    # build.sh records its pinned checkout here. An explicit caller value wins.
+    # shellcheck disable=SC1091
+    set +u; source "$PKG/rbnx-build/piper_sdk.env"; set -u
+fi
+if [[ -n "${PIPER_SDK_PARENT:-}" ]]; then
+    export PYTHONPATH="$PIPER_SDK_PARENT:${PYTHONPATH:-}"
 fi
 
 if ROBONIX_API="$(rbnx path robonix-api 2>/dev/null)"; then
     export PYTHONPATH="$ROBONIX_API:$PKG:${PYTHONPATH:-}"
+else
+    export PYTHONPATH="$PKG:${PYTHONPATH:-}"
 fi
-# robonix_api auto-bootstraps codegen paths from the caller frame, but
-# be explicit so a bare `python3 -m piper_ctl.main` still finds atlas_pb2.
-export PYTHONPATH="$PKG/rbnx-build/codegen/proto_gen:${PYTHONPATH:-}"
+export PYTHONPATH="$PKG/rbnx-build/codegen/proto_gen:$PKG/rbnx-build/codegen/robonix_mcp_types:$PYTHONPATH"
 
-exec python3 -m piper_ctl.main
+exec "$VENV/bin/python" -m piper_ctl.main

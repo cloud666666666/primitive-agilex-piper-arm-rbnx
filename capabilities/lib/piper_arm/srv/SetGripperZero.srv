@@ -1,0 +1,7 @@
+bool fully_closed_confirmed
+---
+bool success
+string arm
+float64 opening_m
+bool homed
+string detail

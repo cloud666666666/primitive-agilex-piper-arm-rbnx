@@ -1,0 +1,9 @@
+[contract]
+id = "robonix/primitive/arm/set_gripper"
+version = "1"
+kind = "primitive"
+idl = "piper_arm/srv/SetGripper.srv"
+description = "Set a Piper gripper opening with bounded effort, automatically enabling disabled drivers and verifying that all six arm joint drivers remain enabled after fresh feedback. Closing targets at or below 0.035 m may also succeed with contact_detected=true when the jaws close by the configured minimum travel and then remain stable against an object, independent of object width; opening commands must reach their requested position."
+
+[mode]
+type = "rpc"

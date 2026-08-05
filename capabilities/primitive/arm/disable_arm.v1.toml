@@ -1,0 +1,9 @@
+[contract]
+id = "robonix/primitive/arm/disable_arm"
+version = "1"
+kind = "primitive"
+idl = "piper_arm/srv/DisableArm.srv"
+description = "Explicitly disable Piper joint drivers 1 through 6 while preserving the factory gripper enable state."
+
+[mode]
+type = "rpc"

@@ -1,0 +1,9 @@
+[contract]
+id = "robonix/primitive/arm/jog_joint"
+version = "1"
+kind = "primitive"
+idl = "piper_arm/srv/JogJoint.srv"
+description = "Move exactly one joint by a bounded relative angle, automatically enabling a disabled arm and leaving it enabled."
+
+[mode]
+type = "rpc"
