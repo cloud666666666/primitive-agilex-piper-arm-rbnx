@@ -35,6 +35,12 @@ def generate_launch_description():
         description='gripper'
     )
 
+    gripper_stroke_m_arg = DeclareLaunchArgument(
+        'gripper_stroke_m',
+        default_value='0.10',
+        description='Gripper mechanical stroke in metres (Piper: 0.10 = 100 mm)'
+    )
+
     # Define the node
     piper_node = Node(
         package='piper',
@@ -46,6 +52,7 @@ def generate_launch_description():
             'auto_enable': LaunchConfiguration('auto_enable'),
             'gripper_val_mutiple': LaunchConfiguration('gripper_val_mutiple'),
             'gripper_exist': LaunchConfiguration('gripper_exist'),
+            'gripper_stroke_m': LaunchConfiguration('gripper_stroke_m'),
         }],
         namespace='/arm'
     )
@@ -56,5 +63,6 @@ def generate_launch_description():
         auto_enable_arg,
         gripper_exist_arg,
         gripper_val_mutiple_arg,
+        gripper_stroke_m_arg,
         piper_node
     ])
