@@ -37,17 +37,28 @@ class PiperRosNode(Node):
         self.declare_parameter('auto_enable', False)
         self.declare_parameter('gripper_exist', True)
         self.declare_parameter('gripper_val_mutiple', 1)
+        self.declare_parameter('gripper_stroke_m', 0.10)
 
         self.can_port = self.get_parameter('can_port').get_parameter_value().string_value
         self.auto_enable = self.get_parameter('auto_enable').get_parameter_value().bool_value
         self.gripper_exist = self.get_parameter('gripper_exist').get_parameter_value().bool_value
         self.gripper_val_mutiple = self.get_parameter('gripper_val_mutiple').get_parameter_value().integer_value
         self.gripper_val_mutiple = max(0, min(self.gripper_val_mutiple, 10))
+        # 夹爪机械行程（米）。这台 Piper 夹爪上位机里显示是 100 mm；
+        # SDK 自带的钳位只给到 70 mm，必须关掉（见下面 C_PiperInterface_V2 的
+        # start_sdk_gripper_limit），再用这个值做软件限位。
+        self.gripper_stroke_m = self.get_parameter('gripper_stroke_m').get_parameter_value().double_value
+        if not 0.0 < self.gripper_stroke_m <= 0.10:
+            self.get_logger().warning(
+                f"gripper_stroke_m={self.gripper_stroke_m} 不合理，夹到 [0.001, 0.10]")
+            self.gripper_stroke_m = max(0.001, min(self.gripper_stroke_m, 0.10))
 
         self.get_logger().info(f"can_port is {self.can_port}")
         self.get_logger().info(f"auto_enable is {self.auto_enable}")
         self.get_logger().info(f"gripper_exist is {self.gripper_exist}")
         self.get_logger().info(f"gripper_val_mutiple is {self.gripper_val_mutiple}")
+        self.get_logger().info(
+            f"gripper_stroke_m is {self.gripper_stroke_m}")
         # Publishers
         self.joint_pub = self.create_publisher(JointState, 'joint_states_single', 1)
         self.joint_ctrl_pub = self.create_publisher(JointState, 'joint_ctrl', 1)
@@ -70,9 +81,19 @@ class PiperRosNode(Node):
         # Enable flag
         self.__enable_flag = False
         self._last_joint_clip_log_time = 0.0
-        # Create piper class and open CAN interface
-        self.piper = C_PiperInterface_V2(can_name=self.can_port)
+        self._last_gripper_clip_log_time = 0.0
+        # Create piper class and open CAN interface.
+        # start_sdk_gripper_limit=False：SDK 默认会按 gripper_range=[0, 0.07]
+        # （70 mm）把夹爪命令钳住，而这台夹爪的机械行程是 100 mm，钳住之后
+        # 上层永远开不到满开口，比 70 mm 大的物体就"夹不住"（实测卡在 69.6 mm）。
+        # sdk backend（piper_arm_sdk/main.py）同样传 False，两个后端保持一致；
+        # 上限改由本节点的 gripper_stroke_m 做软件限位。
+        self.piper = C_PiperInterface_V2(
+            can_name=self.can_port, start_sdk_gripper_limit=False)
         self.piper.ConnectPort()
+        self.get_logger().info(
+            f"gripper SDK limit disabled; software stroke limit "
+            f"{self.gripper_stroke_m * 1000:.1f} mm")
 
         # Start subscription thread
         # `pos_command` (geometry_msgs/Pose) — Cartesian end-effector target.
@@ -109,6 +130,24 @@ class PiperRosNode(Node):
                 )
                 self._last_joint_clip_log_time = now
         return clipped_positions
+
+    def _clip_gripper_for_sdk(self, joint_6: int) -> int:
+        """夹爪软件限位。
+
+        SDK 侧的钳位被关掉之后由这里兜底：上层如果按更大的开口下发
+        （grasp skill 的 `opening_mm` 常写成 102 mm），不能把超过机械行程
+        的命令原样发给固件。
+        """
+        limit = int(round(self.gripper_stroke_m * 1000 * 1000))
+        if joint_6 > limit:
+            now = time.time()
+            if now - self._last_gripper_clip_log_time > 1.0:
+                self.get_logger().warning(
+                    f"Clipped gripper command {joint_6 / 1000:.1f} mm "
+                    f"-> {limit / 1000:.1f} mm (gripper_stroke_m)")
+                self._last_gripper_clip_log_time = now
+            return limit
+        return max(0, joint_6)
 
     def publish_thread(self):
         """Publish messages from the robotic arm
@@ -299,6 +338,7 @@ class PiperRosNode(Node):
             # self.get_logger().info(f"joint_7: {joint_data.position[6]}")
             joint_6 = round(joint_data.position[6] * 1000 * 1000)
             joint_6 = joint_6 * self.gripper_val_mutiple
+            joint_6 = self._clip_gripper_for_sdk(joint_6)
 
         # 控制电机速度
         if self.GetEnableFlag():
