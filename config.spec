@@ -15,6 +15,12 @@ config:
   auto_enable: true
   gripper_exist: true
   gripper_val_mutiple: 2
+  # float, metres, default: 0.10; range: 0.001..0.10.
+  # 夹爪机械行程。Piper SDK 默认按 gripper_range=[0, 0.07] 把夹爪命令钳到
+  # 70 mm（piper_param_manager.py），但这台夹爪上位机里显示的行程是 100 mm；
+  # 不放开的话上层永远开不到满开口，>70 mm 的物体就会"夹不住"。
+  # ros2 backend 会在驱动节点里关掉该 SDK 钳位并用本值做软件限位。
+  gripper_stroke_m: 0.10
   arm_namespace: /arm
   sentinel_timeout_s: 30.0
   # joint_states_topic: /arm/joint_states_single
