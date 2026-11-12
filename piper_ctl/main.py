@@ -152,6 +152,7 @@ def _spawn_piper(cfg: dict) -> None:
         f"auto_enable:={_bool_arg(cfg.get('auto_enable', True))}",
         f"gripper_exist:={_bool_arg(cfg.get('gripper_exist', True))}",
         f"gripper_val_mutiple:={int(cfg.get('gripper_val_mutiple', 2))}",
+        f"gripper_stroke_m:={float(cfg.get('gripper_stroke_m', 0.10))}",
     ]
     log_path = _pkg_root / "rbnx-build" / "data" / "piper.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
